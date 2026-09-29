@@ -5,43 +5,62 @@ A private money-management platform for a team.
 - **Every member gets their own dashboard**: balance, monthly income and spending, 6‑month trend, spending by category, and a transaction list.
 - **The admin sees everyone centrally**: team totals, a per-member table, and can open any member's dashboard (read-only).
 - **Members create their own username and password the first time** via a one-time invite link from the admin, then log in normally after that.
+- **Dollars and naira**: all amounts are kept in US dollars. The **$ USD / ₦ NGN** switch shows everything in naira, and members can type entries in either currency. The rate is the live market rate, or a fixed rate the admin sets on the Team page.
 
-## Run it
+## Where the data lives
 
-Requires Node.js 22.13 or newer (it uses Node's built-in SQLite, so there is nothing else to install).
+All data is stored in Notion, under the private page **Prime Money — App Database**, in three tables:
+
+| Table            | What's in it                                                                 |
+| ---------------- | ---------------------------------------------------------------------------- |
+| **Members**      | One row per person: name, username, role, status, scrambled password, etc.   |
+| **Transactions** | Every entry: member, type, amount in USD, original amount/currency, category |
+| **Settings**     | Team name and the exchange rate                                              |
+
+Keep that page private. Don't edit the *Password hash*, *Invite token* or *Session version* columns by hand.
+
+## Hosting (Vercel)
+
+The website runs on Vercel and deploys automatically from the `main` branch. It needs these environment variables in the Vercel project settings:
+
+| Variable         | Value                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| `NOTION_TOKEN`   | The Internal Integration Secret of the "Prime Money" Notion integration (starts `ntn_`) |
+| `SESSION_SECRET` | A long random string used to sign login cookies                                         |
+
+The Notion integration must be connected to the **Prime Money — App Database** page (page menu **•••** → **Connections** → add "Prime Money").
+
+If the Notion tables are ever recreated, set `NOTION_MEMBERS_DS`, `NOTION_TRANSACTIONS_DS` and `NOTION_SETTINGS_DS` to the new data source IDs.
+
+## First use
+
+1. Open the site. The first visit shows **setup**: pick the team name and create the admin account.
+2. On the **Team** page, check the exchange rate (or set a fixed one).
+3. Under **Invite a team member**, enter their name and send them the invite link (it is copied for you).
+4. The member opens the link, chooses a username and password, and lands on their dashboard. From then on they log in normally.
+
+If a member forgets their password, open them on the **Team** page and click **Reset login & get new link**. Their data is kept. You can also deactivate a member so they can no longer log in.
+
+## Running locally
+
+Requires Node.js 22.
 
 ```bash
 npm install
 npm start          # http://localhost:3000
 ```
 
-1. Open the app. The first visit shows **setup**: pick the team name and currency and create the admin account.
-2. Go to **Team → Invite a team member**, enter their name, and send them the invite link (it is copied for you).
-3. The member opens the link, chooses a username and password, and lands on their dashboard. From then on they log in at the normal login page.
+Without `NOTION_TOKEN` the app uses temporary in-memory storage, which is handy for trying things out. Set `NOTION_TOKEN` (and `SESSION_SECRET`) to use the real Notion data.
 
-If a member forgets their password, open them in **Team** and click **Reset login & get new link**. Their data is kept. You can also deactivate a member so they can no longer log in.
+```bash
+npm test           # runs every scenario against in-memory storage and a Notion API stand-in
+```
 
-## Configuration
-
-| Variable         | Default                 | Purpose                                                   |
-| ---------------- | ----------------------- | --------------------------------------------------------- |
-| `PORT`           | `3000`                  | HTTP port                                                 |
-| `DB_FILE`        | `data/prime-money.db`   | SQLite database file (back this up)                       |
-| `SECURE_COOKIES` | unset                   | Set to `true` when served over HTTPS                      |
-| `TRUST_PROXY`    | unset                   | Set (e.g. `1`) when behind a reverse proxy / load balancer |
+Code layout: `src/routes.js` (API), `src/store/notion.js` (Notion storage), `src/store/memory.js` (in-memory storage), `src/auth.js` (passwords, sessions), `src/rates.js` (exchange rate), `public/` (the web UI), `src/index.js` (entry point).
 
 ## Security notes
 
 - Passwords are hashed with scrypt; they are never stored in plain text.
-- Sessions are random tokens in an HttpOnly, SameSite cookie (14 days).
-- Repeated failed logins are throttled.
+- Logins use a signed, HttpOnly cookie (14 days). Changing a password, resetting a member or deactivating them logs them out everywhere.
+- After 8 wrong passwords an account is locked for 15 minutes.
 - Members can only see and change their own records; only the admin can see everyone.
-
-## Development
-
-```bash
-npm run dev   # restart on file changes
-npm test      # API tests
-```
-
-Code layout: `src/app.js` (API routes), `src/db.js` (schema), `src/auth.js` (passwords, sessions), `public/` (the web UI).

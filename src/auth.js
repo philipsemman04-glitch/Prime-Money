@@ -22,6 +22,25 @@ function randomToken() {
   return crypto.randomBytes(32).toString('base64url');
 }
 
+// Sessions are stateless signed tokens: "<userId>.<sessionVersion>.<expiresMs>.<hmac>".
+// Bumping a member's session version logs them out everywhere.
+function signSession(secret, userId, sessionVersion, now = Date.now()) {
+  const body = `${userId}.${sessionVersion}.${now + SESSION_TTL_MS}`;
+  const mac = crypto.createHmac('sha256', secret).update(body).digest('base64url');
+  return `${body}.${mac}`;
+}
+
+function readSession(secret, token, now = Date.now()) {
+  const parts = typeof token === 'string' ? token.split('.') : [];
+  if (parts.length !== 4) return null;
+  const [userId, version, expires, mac] = parts;
+  const expected = crypto.createHmac('sha256', secret).update(`${userId}.${version}.${expires}`).digest();
+  const given = Buffer.from(mac, 'base64url');
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
+  if (Number(expires) <= now) return null;
+  return { userId, sessionVersion: Number(version) };
+}
+
 function validateUsername(username) {
   if (typeof username !== 'string' || !/^[a-zA-Z0-9._-]{3,32}$/.test(username)) {
     return 'Username must be 3-32 characters: letters, numbers, dot, dash or underscore.';
@@ -66,6 +85,8 @@ module.exports = {
   hashPassword,
   verifyPassword,
   randomToken,
+  signSession,
+  readSession,
   validateUsername,
   validatePassword,
   parseCookies,

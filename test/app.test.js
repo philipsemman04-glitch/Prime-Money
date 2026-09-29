@@ -1,16 +1,30 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { createDb } = require('../src/db');
 const { createApp } = require('../src/routes');
+const { MemoryStore } = require('../src/store/memory');
+const { NotionStore } = require('../src/store/notion');
+const { createFakeNotionClient } = require('./fake-notion');
 
-async function startServer({ fetchLiveRate = async () => 1500 } = {}) {
-  const db = createDb(); // in-memory Postgres
-  const app = createApp(db, { fetchLiveRate });
+const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings' };
+const STORES = {
+  memory: () => new MemoryStore(),
+  notion: () => new NotionStore({ ...IDS, client: createFakeNotionClient(IDS) }),
+};
+
+// Every scenario runs against both storage backends.
+function scenario(name, fn) {
+  for (const [kind, makeStore] of Object.entries(STORES)) {
+    test(`[${kind}] ${name}`, (t) => fn(t, makeStore));
+  }
+}
+
+async function startServer(makeStore, { fetchLiveRate = async () => 1500 } = {}) {
+  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { base, close: () => { server.close(); return db.close(); } };
+  return { base, close: () => server.close() };
 }
 
 // Minimal cookie-keeping client, one per simulated browser.
@@ -26,8 +40,8 @@ function client(base) {
   };
 }
 
-test('admin setup, member invite, personal data and central view', async (t) => {
-  const { base, close } = await startServer();
+scenario('admin setup, member invite, personal data and central view', async (t, makeStore) => {
+  const { base, close } = await startServer(makeStore);
   t.after(close);
 
   const admin = client(base);
@@ -68,25 +82,25 @@ test('admin setup, member invite, personal data and central view', async (t) => 
   const month = new Date().toISOString().slice(0, 7);
   await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: '1500.50', category: 'Salary', date: `${month}-01` } });
   await ada('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 200, category: 'Food', date: `${month}-02` } });
-  r = await ada(`/api/me/summary?month=${month}`);
-  assert.deepEqual([r.body.income, r.body.expense, r.body.balance], [150050, 20000, 130050]);
+  r = await ada(`/api/me/dashboard?month=${month}`);
+  assert.deepEqual([r.body.summary.income, r.body.summary.expense, r.body.summary.balance], [150050, 20000, 130050]);
 
   // Admin sees it centrally; admin's own dashboard stays separate.
   r = await admin(`/api/admin/overview?month=${month}`);
   const row = r.body.members.find((m) => m.username === 'ada');
   assert.equal(row.balance, 130050);
   assert.equal(r.body.team.balance, 130050);
-  assert.equal((await admin(`/api/me/summary?month=${month}`)).body.balance, 0);
+  assert.equal((await admin(`/api/me/dashboard?month=${month}`)).body.summary.balance, 0);
 
   // Fresh login works with the chosen credentials.
   const ada2 = client(base);
   assert.equal((await ada2('/api/login', { method: 'POST', body: { username: 'ada', password: 'wrongpass' } })).status, 401);
   assert.equal((await ada2('/api/login', { method: 'POST', body: { username: 'ADA', password: 'adapassword' } })).status, 200);
-  assert.equal((await ada2(`/api/me/transactions?month=${month}`)).body.length, 2);
+  assert.equal((await ada2(`/api/me/dashboard?month=${month}`)).body.transactions.length, 2);
 });
 
-test('members cannot touch each other\'s data; reset and deactivate work', async (t) => {
-  const { base, close } = await startServer();
+scenario('members cannot touch each other\'s data; reset and deactivate work', async (t, makeStore) => {
+  const { base, close } = await startServer(makeStore);
   t.after(close);
   const admin = client(base);
   await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });
@@ -102,7 +116,7 @@ test('members cannot touch each other\'s data; reset and deactivate work', async
 
   const { body } = await ada('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 5, category: 'Food', date: '2026-01-05' } });
   assert.equal((await ben(`/api/me/transactions/${body.id}`, { method: 'DELETE' })).status, 404);
-  assert.equal((await ben('/api/me/transactions?month=2026-01')).body.length, 0);
+  assert.equal((await ben('/api/me/dashboard?month=2026-01')).body.transactions.length, 0);
 
   // Mutations without the CSRF header are rejected.
   assert.equal((await ada('/api/me/transactions', { method: 'POST', csrf: false, body: {} })).status, 403);
@@ -115,20 +129,20 @@ test('members cannot touch each other\'s data; reset and deactivate work', async
   const overview = (await admin('/api/admin/overview?month=2026-01')).body;
   const adaId = overview.members.find((m) => m.username === 'ada').id;
   const { body: reset } = await admin(`/api/admin/members/${adaId}/reset`, { method: 'POST' });
-  assert.equal((await ada('/api/me/summary')).status, 401);
+  assert.equal((await ada('/api/me/dashboard')).status, 401);
   const ada2 = client(base);
   await ada2(`/api/invite/${reset.inviteToken}`, { method: 'POST', body: { username: 'ada.o', password: 'newpassword' } });
-  assert.equal((await ada2('/api/me/transactions?month=2026-01')).body.length, 1);
+  assert.equal((await ada2('/api/me/dashboard?month=2026-01')).body.transactions.length, 1);
 
   // Deactivated members cannot log in.
   await admin(`/api/admin/members/${adaId}`, { method: 'PATCH', body: { active: false } });
-  assert.equal((await ada2('/api/me/summary')).status, 401);
+  assert.equal((await ada2('/api/me/dashboard')).status, 401);
   assert.equal((await client(base)('/api/login', { method: 'POST', body: { username: 'ada.o', password: 'newpassword' } })).status, 403);
 });
 
-test('amounts are stored in USD; naira entries convert at the current rate', async (t) => {
+scenario('amounts are stored in USD; naira entries convert at the current rate', async (t, makeStore) => {
   let liveRate = 1500;
-  const { base, close } = await startServer({ fetchLiveRate: async () => liveRate });
+  const { base, close } = await startServer(makeStore, { fetchLiveRate: async () => liveRate });
   t.after(close);
   const admin = client(base);
   await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });
@@ -140,10 +154,10 @@ test('amounts are stored in USD; naira entries convert at the current rate', asy
 
   await admin('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 100, currency: 'USD', category: 'Salary', date: '2026-03-01' } });
   await admin('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 30000, currency: 'NGN', category: 'Food', date: '2026-03-02' } });
-  const txs = (await admin('/api/me/transactions?month=2026-03')).body;
+  const txs = (await admin('/api/me/dashboard?month=2026-03')).body.transactions;
   const food = txs.find((x) => x.category === 'Food');
   assert.deepEqual([food.amount, food.originalCurrency, food.originalAmount], [2000, 'NGN', 3000000]);
-  assert.equal((await admin('/api/me/summary?month=2026-03')).body.balance, 8000);
+  assert.equal((await admin('/api/me/dashboard?month=2026-03')).body.summary.balance, 8000);
 
   // Admin can pin a rate, and clear it to go back to live.
   let r = await admin('/api/admin/rate', { method: 'PUT', body: { rate: 1600 } });
@@ -159,8 +173,8 @@ test('amounts are stored in USD; naira entries convert at the current rate', asy
   assert.equal((await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 5, currency: 'EUR', category: 'Gift', date: '2026-03-01' } })).status, 400);
 });
 
-test('login is throttled after repeated failures', async (t) => {
-  const { base, close } = await startServer();
+scenario('login is throttled after repeated failures', async (t, makeStore) => {
+  const { base, close } = await startServer(makeStore);
   t.after(close);
   const admin = client(base);
   await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });

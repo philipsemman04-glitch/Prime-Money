@@ -8,14 +8,13 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test"
+    "test": "node --test \"test/**/*.test.js\""
   },
   "engines": {
     "node": "22.x"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.5.8",
-    "express": "^5.2.1",
-    "pg": "^8.23.0"
+    "@notionhq/client": "^5.26.0",
+    "express": "^5.2.1"
   }
 }

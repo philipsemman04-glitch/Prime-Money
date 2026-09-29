@@ -178,8 +178,8 @@ function route() {
   if (setupNeeded) return renderSetup();
   if (!user) return renderLogin();
 
-  const member = hash.match(/^#\/team\/(\d+)$/);
-  if (member && user.role === 'admin') return renderMemberView(Number(member[1]));
+  const member = hash.match(/^#\/team\/([\w-]+)$/);
+  if (member && user.role === 'admin') return renderMemberView(member[1]);
   if (hash === '#/team' && user.role === 'admin') return renderTeam();
   if (hash === '#/account') return renderAccount();
   return renderMyDashboard();
@@ -396,10 +396,7 @@ function bindAddForm(rerender) {
 // --- personal dashboard ---------------------------------------------------
 
 async function renderMyDashboard() {
-  const [summary, txs] = await Promise.all([
-    api(`/api/me/summary?month=${state.month}`),
-    api(`/api/me/transactions?month=${state.month}`),
-  ]);
+  const { summary, transactions: txs } = await api(`/api/me/dashboard?month=${state.month}`);
   app.innerHTML = `
     <div class="page-head">
       <h1>Hi, ${esc(state.info.user.displayName)}</h1>
@@ -425,6 +422,14 @@ async function renderMyDashboard() {
 }
 
 // --- admin: team overview -------------------------------------------------
+
+function rateText() {
+  const r = state.info.rates.NGN;
+  if (!r?.rate) return '<span class="neg">No exchange rate yet.</span> Set one below so members can use naira.';
+  const when = r.updatedAt ? ` · updated ${formatDateTime(r.updatedAt)}` : '';
+  const kind = r.source === 'manual' ? 'Fixed rate set by you' : 'Live market rate';
+  return `<strong>$1 = ${formatAmount(r.rate * 100, 'NGN')}</strong> <span class="muted">(${kind}${when})</span>`;
+}
 
 async function renderTeam() {
   const data = await api(`/api/admin/overview?month=${state.month}`);
@@ -467,6 +472,18 @@ async function renderTeam() {
       </form>
       <p class="muted" style="font-size:13px;margin:0">Send them the link. The first time they open it they choose their own username and password.</p>
     </div>
+    <div class="card" style="margin-bottom:16px">
+      <h2>Exchange rate</h2>
+      <p style="margin:0 0 12px">${rateText()}</p>
+      <form id="rate" class="form-row" style="align-items:end">
+        <label>Set a fixed rate (₦ per $1) <input name="rate" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="e.g. 1550"></label>
+        <div style="margin-bottom:12px;display:flex;gap:8px">
+          <button class="btn" type="submit">Use this rate</button>
+          ${state.info.rates.NGN?.source === 'manual' ? '<button class="btn ghost" type="button" id="rate-live">Use live rate</button>' : ''}
+        </div>
+      </form>
+      <div class="error" id="rate-error"></div>
+    </div>
     <div class="card">
       <h2>Members — ${esc(monthLabel(state.month))}</h2>
       <div class="table-wrap"><table>
@@ -476,6 +493,13 @@ async function renderTeam() {
     </div>`;
 
   bindMonthPicker(renderTeam);
+  const saveRate = async (rate) => {
+    state.info.rates.NGN = await api('/api/admin/rate', { method: 'PUT', body: { rate } });
+    toast('Exchange rate updated');
+    route();
+  };
+  onSubmit(app.querySelector('#rate'), (d) => saveRate(d.rate));
+  app.querySelector('#rate-live')?.addEventListener('click', () => saveRate(null).catch((e) => toast(e.message)));
   onSubmit(app.querySelector('#invite'), async (d) => {
     const { inviteToken } = await api('/api/admin/members', { method: 'POST', body: d });
     await navigator.clipboard?.writeText(inviteLink(inviteToken)).catch(() => {});
@@ -496,28 +520,24 @@ async function renderTeam() {
 }
 
 async function renderMemberView(id) {
-  let summary, txs, overview;
+  let data;
   try {
-    [summary, txs, overview] = await Promise.all([
-      api(`/api/admin/members/${id}/summary?month=${state.month}`),
-      api(`/api/admin/members/${id}/transactions?month=${state.month}`),
-      api(`/api/admin/overview?month=${state.month}`),
-    ]);
+    data = await api(`/api/admin/members/${id}/dashboard?month=${state.month}`);
   } catch (err) {
     app.innerHTML = `<div class="card"><p>${esc(err.message)}</p><a href="#/team">Back to team</a></div>`;
     return;
   }
-  const m = overview.members.find((x) => x.id === id);
+  const { summary, transactions: txs, member: m } = data;
   const isSelf = id === state.info.user.id;
 
   app.innerHTML = `
     <p style="margin:0 0 8px"><a href="#/team">&larr; Team</a></p>
     <div class="page-head">
-      <h1>${esc(summary.member.displayName)} <span class="pill ${m.status}">${m.status}</span></h1>
+      <h1>${esc(m.displayName)} <span class="pill ${m.status}">${m.status}</span></h1>
       ${monthPicker()}
     </div>
     <p class="muted" style="margin:-12px 0 16px;font-size:14px">
-      ${m.username ? '@' + esc(m.username) + ' · ' : ''}Last login ${formatDateTime(m.lastLoginAt)} · Last entry ${formatDateTime(m.lastActivityAt)}
+      ${m.username ? '@' + esc(m.username) + ' · ' : ''}Last login ${formatDateTime(m.lastLoginAt)}
     </p>
     ${statsHtml(summary)}
     ${chartsHtml(summary)}
@@ -540,7 +560,7 @@ async function renderMemberView(id) {
   bindMonthPicker(() => renderMemberView(id));
   if (isSelf) return;
   app.querySelector('#reset').addEventListener('click', async () => {
-    if (!confirm(`Reset ${summary.member.displayName}'s login? Their current password stops working.`)) return;
+    if (!confirm(`Reset ${m.displayName}'s login? Their current password stops working.`)) return;
     const { inviteToken } = await api(`/api/admin/members/${id}/reset`, { method: 'POST' });
     await navigator.clipboard?.writeText(inviteLink(inviteToken)).catch(() => {});
     toast('New link created and copied');
@@ -548,7 +568,7 @@ async function renderMemberView(id) {
   });
   app.querySelector('#toggle').addEventListener('click', async () => {
     const activate = m.status === 'deactivated';
-    if (!activate && !confirm(`Deactivate ${summary.member.displayName}? They will not be able to log in.`)) return;
+    if (!activate && !confirm(`Deactivate ${m.displayName}? They will not be able to log in.`)) return;
     await api(`/api/admin/members/${id}`, { method: 'PATCH', body: { active: activate } });
     toast(activate ? 'Reactivated' : 'Deactivated');
     renderMemberView(id);
