@@ -1,0 +1,18 @@
+{
+  "name": "prime-money",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Team money management platform: personal dashboards for members, central overview for the admin.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning src/server.js",
+    "dev": "node --no-warnings=ExperimentalWarning --watch src/server.js",
+    "test": "node --no-warnings=ExperimentalWarning --test"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
