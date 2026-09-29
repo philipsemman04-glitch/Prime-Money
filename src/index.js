@@ -13,9 +13,9 @@ const onVercel = Boolean(env.VERCEL);
 // "Prime Money — App Database" Notion page. Override with env vars if the
 // tables are ever recreated.
 const NOTION_IDS = {
-  membersId: env.NOTION_MEMBERS_DS || '626cdbe8-a831-4f27-8b72-f94ce6c67867',
-  transactionsId: env.NOTION_TRANSACTIONS_DS || '38cc2993-56f1-4346-882c-d138b2ee065d',
-  settingsId: env.NOTION_SETTINGS_DS || '0d171334-80bd-41b4-9a33-e996365dbe8e',
+  membersId: env.NOTION_MEMBERS_DS || '256dba6f-a471-82ef-886b-07568bc5a93d',
+  transactionsId: env.NOTION_TRANSACTIONS_DS || 'b2bdba6f-a471-83ee-b165-87e04eb0e250',
+  settingsId: env.NOTION_SETTINGS_DS || 'a1ddba6f-a471-8230-a00b-075b1f4f1329',
 };
 
 let store;
