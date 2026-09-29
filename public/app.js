@@ -553,7 +553,7 @@ async function renderMyDashboard() {
       id: u.username ? '@' + u.username : '',
       month: summary,
     })}
-    ${potsHtml(pots, { canRequest: u.role !== 'admin' })}
+    ${potsHtml(pots, { canRequest: true })}
     ${chartsHtml(summary)}
     <div class="grid-3-2 add-first">
       <div class="card">
@@ -654,6 +654,23 @@ async function renderTeam() {
       </div>
     </div>
     <div class="card" style="margin-bottom:18px">
+      <div class="card-head"><div><h2>Email notifications</h2><div class="muted" style="font-size:13px">Get an email whenever a team member requests funds.</div></div>
+        <span class="pill ${state.info.emailEnabled && state.info.notifyEmail ? 'active' : 'invited'}">${state.info.emailEnabled && state.info.notifyEmail ? 'On' : 'Off'}</span></div>
+      ${
+        state.info.emailEnabled
+          ? ''
+          : '<div class="warn" style="margin:0 0 14px">Email sending is not switched on yet. It needs a Resend key added in Vercel (<code>RESEND_API_KEY</code>). You can save your address now.</div>'
+      }
+      <form id="notify">
+        <div class="inline-form">
+          <label>Send notifications to <input name="email" type="email" maxlength="200" placeholder="you@example.com" value="${esc(state.info.notifyEmail || '')}"></label>
+          <button class="btn" type="submit">Save</button>
+          <button class="btn ghost" type="button" id="notify-test" ${state.info.notifyEmail && state.info.emailEnabled ? '' : 'disabled'}>Send test email</button>
+        </div>
+        <div class="error"></div>
+      </form>
+    </div>
+    <div class="card" style="margin-bottom:18px">
       <div class="card-head"><div><h2>Income split</h2><div class="muted" style="font-size:13px">How every member's income is divided. Must add up to 100%.</div></div></div>
       <form id="alloc">
         <div class="alloc-row">
@@ -686,6 +703,23 @@ async function renderTeam() {
     route();
   };
   onSubmit(app.querySelector('#rate'), (d) => saveRate(d.rate));
+  onSubmit(app.querySelector('#notify'), async (d) => {
+    const { email } = await api('/api/admin/notify-email', { method: 'PUT', body: { email: d.email } });
+    state.info.notifyEmail = email;
+    toast(email ? 'Notification email saved' : 'Email notifications turned off');
+    renderTeam();
+  });
+  app.querySelector('#notify-test').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await api('/api/admin/notify-email/test', { method: 'POST' });
+      toast(`Test email sent to ${state.info.notifyEmail}`);
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      e.target.disabled = false;
+    }
+  });
   const allocForm = app.querySelector('#alloc');
   const showSum = () => {
     const sum = state.info.pots.reduce((s, p) => s + (Number(allocForm.elements[p].value) || 0), 0);
@@ -895,7 +929,7 @@ async function renderNewRequest(preselect) {
       method: 'POST',
       body: { pot: d.pot, items, currency: cur, reason: d.reason, bankName: d.bankName, accountNumber: d.accountNumber, accountName: d.accountName },
     });
-    toast('Request sent to your admin');
+    toast(state.info.user.role === 'admin' ? 'Request saved' : 'Request sent to your admin');
     location.hash = '#/requests';
   });
 }
@@ -965,9 +999,12 @@ async function renderReviewRequests(filter = state.requestFilter || 'pending') {
   app.innerHTML = `
     <div class="page-head">
       <div><div class="eyebrow">Admin</div><h1>Fund requests</h1></div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <a class="btn ghost small" href="#/requests/new">${ICONS.send} Request funds</a>
       <div class="seg">
         <button type="button" data-filter="pending" class="${filter === 'pending' ? 'on' : ''}">Pending (${pendingCount})</button>
         <button type="button" data-filter="all" class="${filter === 'all' ? 'on' : ''}">All</button>
+      </div>
       </div>
     </div>
     ${list.length ? `<div class="req-list">${list.map((r) => requestCard(r, { admin: true })).join('')}</div>` : `<div class="card empty">${ICONS.inbox}${filter === 'pending' ? 'No requests waiting for you.' : 'No fund requests yet.'}</div>`}`;

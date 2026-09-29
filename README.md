@@ -6,7 +6,7 @@ A private money-management platform for a team.
 - **The admin sees everyone centrally**: team totals, a per-member table, and can open any member's dashboard (read-only).
 - **Members create their own username and password the first time** via a one-time invite link from the admin, then log in normally after that.
 - **Pots**: every income is split into Business 30%, Personal 30%, Savings 20% and Investment 20% (the admin can change the split on the Team page). Expenses come out of a pot (Personal by default).
-- **Fund requests**: a member picks a pot, lists what they need with prices, and gives the bank account to pay into. The admin sees a badge on **Requests** (and in the browser tab), then approves or declines with an optional note. Approving records the payout as an expense from that pot; the admin then sends the money.
+- **Fund requests**: a member picks a pot, lists what they need with prices, and gives the bank account to pay into. The admin sees a badge on **Requests** (and in the browser tab), and can get an email for each new request (set the address on the Team page), then approves or declines with an optional note. Approving records the payout as an expense from that pot; the admin then sends the money.
 - **Dollars and naira**: all amounts are kept in US dollars. The **$ USD / ₦ NGN** switch shows everything in naira, and members can type entries in either currency. The rate is the live market rate, or a fixed rate the admin sets on the Team page.
 
 ## Where the data lives
@@ -30,6 +30,8 @@ The website runs on Vercel and deploys automatically from the `main` branch. It 
 | ---------------- | --------------------------------------------------------------------------------------- |
 | `NOTION_TOKEN`   | The Internal Integration Secret of the "Prime Money" Notion integration (starts `ntn_`) |
 | `SESSION_SECRET` | A long random string used to sign login cookies                                         |
+| `RESEND_API_KEY` | Optional. API key from resend.com, used to email the admin about new fund requests      |
+| `EMAIL_FROM`     | Optional. Sender address; defaults to `Team Prime <onboarding@resend.dev>`              |
 
 The Notion integration must be connected to the **Prime Money — App Database** page (page menu **•••** → **Connections** → add "Prime Money").
 

@@ -382,6 +382,11 @@ table.items tr.total td { font-weight: 700; border-top: 1px solid var(--border-s
 .alloc-row .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--pot); margin-right: 6px; }
 @media (max-width: 700px) { .alloc-row { grid-template-columns: 1fr 1fr; } }
 
+.inline-form { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.inline-form label { flex: 1 1 280px; margin-bottom: 0; }
+.inline-form .btn { height: 44px; }
+code { font-size: 12px; padding: 1px 5px; border-radius: 5px; background: rgba(0, 0, 0, 0.3); }
+
 /* ---------- phones: bottom tab bar ---------- */
 @media (max-width: 700px) {
   /* No backdrop-filter here: it would make the fixed tab bar below position

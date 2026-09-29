@@ -2,6 +2,9 @@ const path = require('node:path');
 const express = require('express');
 const auth = require('./auth');
 const { getNgnRate } = require('./rates');
+const { createNotifier, fundRequestEmail } = require('./notify');
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 const INCOME_CATEGORIES = ['Salary', 'Bonus', 'Business', 'Investment', 'Gift', 'Other income'];
 const EXPENSE_CATEGORIES = [
@@ -148,7 +151,7 @@ async function dashboardFor(store, userId, month) {
   };
 }
 
-function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate } = {}) {
+function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate, notifier = createNotifier() } = {}) {
   if (!sessionSecret) throw new Error('sessionSecret is required');
   const app = express();
 
@@ -218,6 +221,9 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
       allocation: parseAllocation(rawAllocation),
       pots: POTS,
       pendingRequests: pending ? pending.length : undefined,
+      ...(req.user?.role === 'admin'
+        ? { notifyEmail: (await store.getSetting('notify_email')) || '', emailEnabled: notifier.enabled }
+        : {}),
       setupNeeded: !hasAdmin,
       teamName: teamName || 'Team Prime',
       baseCurrency: 'USD',
@@ -436,6 +442,18 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
       accountNumber: number,
       accountName: holder,
     });
+
+    // Email the admin. A failed email never fails the request itself.
+    const notifyEmail = req.user.role === 'admin' ? null : await store.getSetting('notify_email');
+    if (notifyEmail && notifier.enabled) {
+      try {
+        const teamName = (await store.getSetting('team_name')) || 'Team Prime';
+        const reviewUrl = `${req.protocol}://${req.get('host')}/#/requests`;
+        await notifier.send({ to: notifyEmail, ...fundRequestEmail({ request, member: req.user, teamName, reviewUrl }) });
+      } catch (err) {
+        console.error('Fund request email failed:', err.message);
+      }
+    }
     res.status(201).json(publicRequest(request));
   });
 
@@ -561,6 +579,36 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
       transactionId: tx.id,
     });
     res.json({ ok: true, status: 'approved' });
+  });
+
+  app.put('/api/admin/notify-email', requireUser, requireAdmin, async (req, res) => {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    if (email && (!EMAIL_RE.test(email) || email.length > 200)) {
+      return res.status(400).json({ error: 'Enter a valid email address.' });
+    }
+    if (email) await store.setSetting('notify_email', email);
+    else await store.deleteSetting('notify_email');
+    res.json({ email });
+  });
+
+  app.post('/api/admin/notify-email/test', requireUser, requireAdmin, async (req, res) => {
+    const to = await store.getSetting('notify_email');
+    if (!to) return res.status(400).json({ error: 'Save an email address first.' });
+    if (!notifier.enabled) {
+      return res.status(503).json({ error: 'Email sending is not switched on yet: RESEND_API_KEY is missing in Vercel.' });
+    }
+    try {
+      await notifier.send({
+        to,
+        subject: 'Team Prime: test notification',
+        text: 'Email notifications are working. You will get an email like this whenever a team member requests funds.',
+        html: '<p>Email notifications are working. You will get an email like this whenever a team member requests funds.</p>',
+      });
+    } catch (err) {
+      console.error('Test email failed:', err.message);
+      return res.status(502).json({ error: `The email service refused the message. ${err.message}` });
+    }
+    res.json({ ok: true });
   });
 
   app.put('/api/admin/allocation', requireUser, requireAdmin, async (req, res) => {

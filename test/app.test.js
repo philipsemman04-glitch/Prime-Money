@@ -18,8 +18,8 @@ function scenario(name, fn) {
   }
 }
 
-async function startServer(makeStore, { fetchLiveRate = async () => 1500 } = {}) {
-  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate });
+async function startServer(makeStore, { fetchLiveRate = async () => 1500, notifier } = {}) {
+  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate, ...(notifier ? { notifier } : {}) });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -259,4 +259,67 @@ scenario('income is split into pots; fund requests are approved or declined by t
   assert.equal((await admin('/api/admin/allocation', { method: 'PUT', body: { business: 50, personal: 30, savings: 20, investment: 20 } })).status, 400);
   assert.equal((await admin('/api/admin/allocation', { method: 'PUT', body: { business: 40, personal: 30, savings: 20, investment: 10 } })).status, 200);
   assert.equal((await ada('/api/state')).body.allocation.business, 40);
+});
+
+scenario('the admin gets an email when a member requests funds', async (t, makeStore) => {
+  const sent = [];
+  let failNext = false;
+  const notifier = {
+    enabled: true,
+    async send(msg) {
+      if (failNext) throw new Error('mail server down');
+      sent.push(msg);
+      return { sent: true };
+    },
+  };
+  const { base, close } = await startServer(makeStore, { notifier });
+  t.after(close);
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { teamName: 'Team Prime', displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+  const { body: inv } = await admin('/api/admin/members', { method: 'POST', body: { displayName: 'Ada Obi' } });
+  const ada = client(base);
+  await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123' } });
+  const request = { pot: 'business', items: [{ name: 'Laptop <Pro>', price: 500 }], reason: 'Work', bankName: 'GTBank', accountNumber: '0123456789', accountName: 'Ada Obi' };
+
+  // No address saved yet: nothing is sent, the request still goes through.
+  assert.equal((await ada('/api/me/requests', { method: 'POST', body: request })).status, 201);
+  assert.equal(sent.length, 0);
+
+  assert.equal((await admin('/api/admin/notify-email', { method: 'PUT', body: { email: 'not-an-email' } })).status, 400);
+  assert.equal((await ada('/api/admin/notify-email', { method: 'PUT', body: { email: 'x@y.com' } })).status, 403);
+  await admin('/api/admin/notify-email', { method: 'PUT', body: { email: 'boss@example.com' } });
+  const state = (await admin('/api/state')).body;
+  assert.deepEqual([state.notifyEmail, state.emailEnabled], ['boss@example.com', true]);
+  assert.equal((await ada('/api/state')).body.notifyEmail, undefined);
+
+  assert.equal((await ada('/api/me/requests', { method: 'POST', body: request })).status, 201);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'boss@example.com');
+  assert.equal(sent[0].subject, 'New fund request: $500.00 from Ada Obi');
+  assert.match(sent[0].html, /Laptop &lt;Pro&gt;/); // user text is escaped
+  assert.match(sent[0].html, /0123456789/);
+  assert.match(sent[0].text, /\/#\/requests/);
+
+  // A failing email service does not block the request.
+  failNext = true;
+  assert.equal((await ada('/api/me/requests', { method: 'POST', body: request })).status, 201);
+  failNext = false;
+
+  // Test email button.
+  assert.equal((await admin('/api/admin/notify-email/test', { method: 'POST' })).status, 200);
+  assert.equal(sent.at(-1).subject, 'Team Prime: test notification');
+});
+
+scenario('the admin can request funds too', async (t, makeStore) => {
+  const { base, close } = await startServer(makeStore);
+  t.after(close);
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+  const r = await admin('/api/me/requests', {
+    method: 'POST',
+    body: { pot: 'personal', items: [{ name: 'Rent', price: 200 }], bankName: 'Access', accountNumber: '1234567890', accountName: 'Boss' },
+  });
+  assert.equal(r.status, 201);
+  const list = (await admin('/api/admin/requests')).body;
+  assert.equal(list[0].member.username, 'boss');
 });

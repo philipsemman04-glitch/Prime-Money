@@ -5,6 +5,7 @@ const express = require('express');
 const { createApp } = require('./routes');
 const { NotionStore } = require('./store/notion');
 const { MemoryStore } = require('./store/memory');
+const { createNotifier } = require('./notify');
 
 const env = process.env;
 const onVercel = Boolean(env.VERCEL);
@@ -36,7 +37,8 @@ if (!sessionSecret) {
 
 const app = express();
 if (onVercel || env.TRUST_PROXY) app.set('trust proxy', env.TRUST_PROXY || 1);
-app.use(createApp(store, { sessionSecret, secureCookies: onVercel || env.SECURE_COOKIES === 'true' }));
+const notifier = createNotifier({ apiKey: env.RESEND_API_KEY, ...(env.EMAIL_FROM ? { from: env.EMAIL_FROM } : {}) });
+app.use(createApp(store, { sessionSecret, secureCookies: onVercel || env.SECURE_COOKIES === 'true', notifier }));
 
 module.exports = app;
 
