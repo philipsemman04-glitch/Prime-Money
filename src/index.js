@@ -1,6 +1,7 @@
 // Entry point. On Vercel the exported app is served as a function; locally
 // `npm start` runs it as a normal server.
 const crypto = require('node:crypto');
+const express = require('express');
 const { createApp } = require('./routes');
 const { NotionStore } = require('./store/notion');
 const { MemoryStore } = require('./store/memory');
@@ -32,8 +33,9 @@ if (!sessionSecret) {
   sessionSecret = crypto.randomBytes(32).toString('hex');
 }
 
-const app = createApp(store, { sessionSecret, secureCookies: onVercel || env.SECURE_COOKIES === 'true' });
+const app = express();
 if (onVercel || env.TRUST_PROXY) app.set('trust proxy', env.TRUST_PROXY || 1);
+app.use(createApp(store, { sessionSecret, secureCookies: onVercel || env.SECURE_COOKIES === 'true' }));
 
 module.exports = app;
 
