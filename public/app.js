@@ -67,6 +67,41 @@ function formatDateTime(iso) {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+const initials = (name) =>
+  String(name || '?')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase();
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+}
+
+// Stable colour per category, tuned for the dark theme.
+const CAT_COLORS = ['#5b9bff', '#e3b448', '#2dd4bf', '#a78bfa', '#fb923c', '#f472b6', '#4ade80', '#38bdf8'];
+function catColor(name) {
+  let h = 0;
+  for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return CAT_COLORS[h % CAT_COLORS.length];
+}
+
+const svg = (d, size = 18) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ICONS = {
+  wallet: svg('<path d="M20 7H5a2 2 0 0 1 0-4h13v4"/><path d="M3 5v14a2 2 0 0 0 2 2h15V7"/><path d="M16 14h.01"/>'),
+  team: svg('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'),
+  user: svg('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'),
+  up: svg('<path d="M7 17 17 7"/><path d="M8 7h9v9"/>'),
+  down: svg('<path d="M17 7 7 17"/><path d="M16 17H7V8"/>'),
+  net: svg('<path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/>'),
+  trash: svg('<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>', 16),
+  inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>', 28),
+};
+
 function toast(message) {
   const el = document.getElementById('toast');
   el.textContent = message;
@@ -103,9 +138,9 @@ const inviteLink = (token) => `${location.origin}/#/invite/${token}`;
 function monthPicker() {
   return `
     <div class="month-picker">
-      <button class="btn ghost small" data-month="-1" aria-label="Previous month">&larr;</button>
+      <button type="button" data-month="-1" aria-label="Previous month">&#8249;</button>
       <span>${esc(monthLabel(state.month))}</span>
-      <button class="btn ghost small" data-month="1" aria-label="Next month">&rarr;</button>
+      <button type="button" data-month="1" aria-label="Next month">&#8250;</button>
     </div>`;
 }
 
@@ -122,27 +157,32 @@ function bindMonthPicker(rerender) {
 
 function renderShell() {
   const user = state.info?.user;
-  const bar = document.getElementById('topbar');
-  bar.hidden = !user;
-  document.getElementById('brand').textContent = state.info?.teamName || 'Prime Money';
-  document.title = state.info?.teamName || 'Prime Money';
+  const teamName = state.info?.teamName || 'Team Prime';
+  document.getElementById('topbar').hidden = !user;
+  document.getElementById('brand').textContent = teamName;
+  document.title = teamName;
   if (!user) return;
+
   document.getElementById('who-name').textContent = user.displayName;
+  document.getElementById('who-avatar').textContent = initials(user.displayName);
+
   const cur = displayCurrency();
   const noRate = !ngnRate();
   document.getElementById('currency').innerHTML = ['USD', 'NGN']
     .map(
-      (c) => `<button type="button" data-cur="${c}" class="${c === cur ? 'on' : ''}" ${c === 'NGN' && noRate ? 'disabled title="No exchange rate available yet"' : ''}>${c === 'USD' ? '$ USD' : '₦ NGN'}</button>`,
+      (c) =>
+        `<button type="button" data-cur="${c}" class="${c === cur ? 'on' : ''}" ${c === 'NGN' && noRate ? 'disabled title="No exchange rate available yet"' : ''}>${c === 'USD' ? '$ USD' : '₦ NGN'}</button>`,
     )
     .join('');
+
   const route = location.hash || '#/';
-  const links = [['#/', 'My money']];
-  if (user.role === 'admin') links.push(['#/team', 'Team']);
-  links.push(['#/account', 'Account']);
+  const links = [['#/', 'My money', ICONS.wallet]];
+  if (user.role === 'admin') links.push(['#/team', 'Team', ICONS.team]);
+  links.push(['#/account', 'Account', ICONS.user]);
   document.getElementById('nav').innerHTML = links
-    .map(([href, text]) => {
+    .map(([href, text, icon]) => {
       const active = href === '#/' ? route === '#/' : route.startsWith(href);
-      return `<a href="${href}" class="${active ? 'active' : ''}">${text}</a>`;
+      return `<a href="${href}" class="${active ? 'active' : ''}">${icon}<span>${text}</span></a>`;
     })
     .join('');
 }
@@ -172,6 +212,7 @@ function route() {
   const hash = location.hash || '#/';
   const { setupNeeded, user } = state.info;
   renderShell();
+  window.scrollTo(0, 0);
 
   const invite = hash.match(/^#\/invite\/([\w-]+)$/);
   if (invite) return renderInvite(invite[1]);
@@ -189,21 +230,33 @@ window.addEventListener('hashchange', route);
 
 // --- auth pages -----------------------------------------------------------
 
+function authPage({ title, subtitle, body, foot = '' }) {
+  return `
+    <div class="auth"><div class="auth-box">
+      <img class="auth-logo" src="/logo.jpg" alt="Team Prime">
+      <div class="auth-title"><h1>${title}</h1>${subtitle ? `<p>${subtitle}</p>` : ''}</div>
+      <div class="card">${body}</div>
+      ${foot ? `<div class="auth-foot">${foot}</div>` : ''}
+    </div></div>`;
+}
+
 function renderSetup() {
-  app.innerHTML = `
-    <div class="card auth-card">
-      <h1>Welcome to Prime Money</h1>
-      <p class="sub">Set up your team and create the admin account. You will be able to see everyone's dashboard.</p>
+  app.innerHTML = authPage({
+    title: 'Set up your team',
+    subtitle: "Create the admin account. You'll be able to see everyone's dashboard.",
+    body: `
       <form id="f">
-        <label>Team name <input name="teamName" placeholder="e.g. Prime Team" maxlength="60"></label>
-        <label>Your name <input name="displayName" required maxlength="60"></label>
+        <label>Team name <input name="teamName" value="Team Prime" maxlength="60"></label>
+        <label>Your name <input name="displayName" required maxlength="60" placeholder="e.g. Philip Emmanuel"></label>
         <label>Username <input name="username" required autocomplete="username"></label>
-        <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
-        <label>Confirm password <input name="confirm" type="password" required autocomplete="new-password"></label>
+        <div class="form-row">
+          <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+          <label>Confirm <input name="confirm" type="password" required autocomplete="new-password"></label>
+        </div>
         <div class="error"></div>
         <button class="btn block" type="submit">Create team</button>
-      </form>
-    </div>`;
+      </form>`,
+  });
   onSubmit(app.querySelector('#f'), async (d) => {
     if (d.password !== d.confirm) throw new Error('Passwords do not match.');
     await api('/api/setup', { method: 'POST', body: d });
@@ -213,18 +266,18 @@ function renderSetup() {
 }
 
 function renderLogin() {
-  app.innerHTML = `
-    <div class="card auth-card">
-      <h1>Log in</h1>
-      <p class="sub">${esc(state.info.teamName)}</p>
+  app.innerHTML = authPage({
+    title: 'Welcome back',
+    subtitle: `Sign in to your ${esc(state.info.teamName)} account`,
+    body: `
       <form id="f">
         <label>Username <input name="username" required autocomplete="username" autofocus></label>
         <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
         <div class="error"></div>
-        <button class="btn block" type="submit">Log in</button>
-      </form>
-      <p class="muted" style="font-size:13px;margin:16px 0 0">First time here? Use the invite link your admin sent you.</p>
-    </div>`;
+        <button class="btn block" type="submit">Sign in</button>
+      </form>`,
+    foot: 'First time here? Open the invite link your admin sent you.',
+  });
   onSubmit(app.querySelector('#f'), async (d) => {
     await api('/api/login', { method: 'POST', body: d });
     location.hash = '#/';
@@ -238,26 +291,25 @@ async function renderInvite(token) {
   try {
     invite = await api(`/api/invite/${token}`);
   } catch (err) {
-    app.innerHTML = `
-      <div class="card auth-card">
-        <h1>Invite not valid</h1>
-        <p class="sub">${esc(err.message)}</p>
-        <a class="btn block" href="#/login">Go to login</a>
-      </div>`;
+    app.innerHTML = authPage({
+      title: 'Invite not valid',
+      subtitle: esc(err.message),
+      body: '<a class="btn block" href="#/login">Go to sign in</a>',
+    });
     return;
   }
-  app.innerHTML = `
-    <div class="card auth-card">
-      <h1>Hi ${esc(invite.displayName)} 👋</h1>
-      <p class="sub">You've been invited to ${esc(invite.teamName)}. Choose a username and password — you'll use them to log in from now on.</p>
+  app.innerHTML = authPage({
+    title: `Welcome, ${esc(invite.displayName)}`,
+    subtitle: `You've been invited to ${esc(invite.teamName)}. Choose a username and password — you'll use them to sign in from now on.`,
+    body: `
       <form id="f">
         <label>Username <input name="username" required autocomplete="username" autofocus></label>
-        <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+        <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters"></label>
         <label>Confirm password <input name="confirm" type="password" required autocomplete="new-password"></label>
         <div class="error"></div>
-        <button class="btn block" type="submit">Create my account</button>
-      </form>
-    </div>`;
+        <button class="btn block" type="submit">Open my account</button>
+      </form>`,
+  });
   onSubmit(app.querySelector('#f'), async (d) => {
     if (d.password !== d.confirm) throw new Error('Passwords do not match.');
     await api(`/api/invite/${token}`, { method: 'POST', body: { username: d.username, password: d.password } });
@@ -268,14 +320,25 @@ async function renderInvite(token) {
 
 // --- dashboard pieces -----------------------------------------------------
 
-function statsHtml(s) {
+// Bank-card style hero: balance on the left, this month's figures on the right.
+function accountCard({ label, balance, holderLabel, holder, idLabel, id, month }) {
   return `
-    <div class="stats">
-      <div class="card stat"><div class="label">Balance (all time)</div><div class="value ${tone(s.balance)}">${money(s.balance)}</div></div>
-      <div class="card stat"><div class="label">Income this month</div><div class="value pos">${money(s.income)}</div></div>
-      <div class="card stat"><div class="label">Spent this month</div><div class="value neg">${money(s.expense)}</div></div>
-      <div class="card stat"><div class="label">Net this month</div><div class="value ${tone(s.net)}">${money(s.net, { sign: true })}</div></div>
-    </div>`;
+    <section class="account">
+      <div style="position:relative;z-index:1">
+        <div class="chip" aria-hidden="true"></div>
+        <div class="eyebrow">${label}</div>
+        <div class="balance ${balance < 0 ? 'neg' : ''}">${money(balance)}</div>
+        <div class="holder">
+          <div>${holderLabel}<b>${esc(holder)}</b></div>
+          ${id ? `<div>${idLabel}<b>${esc(id)}</b></div>` : ''}
+        </div>
+      </div>
+      <div class="side">
+        <div class="mini"><span class="ico in">${ICONS.up}</span><div><div class="lbl">Income · ${esc(monthLabel(month.month, true))}</div><div class="val">${money(month.income)}</div></div></div>
+        <div class="mini"><span class="ico out">${ICONS.down}</span><div><div class="lbl">Spent · ${esc(monthLabel(month.month, true))}</div><div class="val">${money(month.expense)}</div></div></div>
+        <div class="mini"><span class="ico net">${ICONS.net}</span><div><div class="lbl">Net this month</div><div class="val ${tone(month.net)}">${money(month.net, { sign: true })}</div></div></div>
+      </div>
+    </section>`;
 }
 
 function chartsHtml(s) {
@@ -283,7 +346,7 @@ function chartsHtml(s) {
   const trend = s.trend
     .map(
       (t) => `
-      <div class="col" title="${esc(monthLabel(t.month))}: in ${money(t.income)}, out ${money(t.expense)}">
+      <div class="col ${t.month === s.month ? 'current' : ''}" title="${esc(monthLabel(t.month))}: in ${money(t.income)}, out ${money(t.expense)}">
         <div class="pair">
           <div class="bar in" style="height:${(t.income / max) * 100}%"></div>
           <div class="bar out" style="height:${(t.expense / max) * 100}%"></div>
@@ -296,79 +359,88 @@ function chartsHtml(s) {
   const catMax = Math.max(1, ...s.categories.map((c) => c.total));
   const cats = s.categories.length
     ? s.categories
-        .map(
-          (c) => `
+        .map((c) => {
+          const color = catColor(c.category);
+          return `
         <div class="cat-row">
-          <span>${esc(c.category)}</span>
-          <div class="cat-track"><div class="cat-fill" style="width:${(c.total / catMax) * 100}%"></div></div>
+          <span class="tx-ico" style="width:34px;height:34px;border-radius:10px;background:${color}22;color:${color}">${esc(c.category[0])}</span>
+          <div>
+            <div class="name"><span>${esc(c.category)}</span><span class="muted">${Math.round((c.total / Math.max(1, s.expense)) * 100)}%</span></div>
+            <div class="cat-track"><div class="cat-fill" style="width:${(c.total / catMax) * 100}%;background:${color}"></div></div>
+          </div>
           <span class="amt">${money(c.total)}</span>
-        </div>`,
-        )
+        </div>`;
+        })
         .join('')
-    : '<div class="empty">No spending recorded this month.</div>';
+    : `<div class="empty">${ICONS.inbox}No spending recorded this month.</div>`;
 
   return `
-    <div class="grid-2">
+    <div class="grid-2" style="margin-bottom:18px">
       <div class="card">
-        <h2>Last 6 months</h2>
+        <div class="card-head"><h2>Cash flow</h2>
+          <div class="legend"><span><i style="background:#3d82f5"></i>Income</span><span><i style="background:var(--gold)"></i>Spending</span></div>
+        </div>
         <div class="bars">${trend}</div>
-        <div class="legend"><span><i style="background:var(--income)"></i>Income</span><span><i style="background:var(--expense)"></i>Spending</span></div>
       </div>
       <div class="card">
-        <h2>Spending by category</h2>
+        <div class="card-head"><h2>Spending by category</h2></div>
         ${cats}
       </div>
     </div>`;
 }
 
 function transactionsHtml(list, { editable }) {
-  if (!list.length) return '<div class="empty">No transactions this month yet.</div>';
+  if (!list.length) return `<div class="empty">${ICONS.inbox}No transactions this month yet.</div>`;
   return `
-    <div class="table-wrap"><table>
-      <thead><tr><th>Date</th><th>Category</th><th>Note</th><th class="num">Amount</th>${editable ? '<th></th>' : ''}</tr></thead>
-      <tbody>
-        ${list
-          .map(
-            (t) => `
-          <tr>
-            <td>${esc(new Date(t.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))}</td>
-            <td>${esc(t.category)}</td>
-            <td class="muted">${esc(t.note)}</td>
-            <td class="num ${t.type === 'income' ? 'pos' : 'neg'}">${t.type === 'income' ? '+' : '−'}${money(t.amount)}${
-              t.originalCurrency !== displayCurrency()
-                ? `<div class="muted orig">entered as ${formatAmount(t.originalAmount, t.originalCurrency)}</div>`
-                : ''
-            }</td>
-            ${editable ? `<td class="num"><button class="btn danger small" data-del="${t.id}">Delete</button></td>` : ''}
-          </tr>`,
-          )
-          .join('')}
-      </tbody>
-    </table></div>`;
+    <ul class="tx-list">
+      ${list
+        .map((t) => {
+          const color = catColor(t.category);
+          const date = new Date(t.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+          const orig =
+            t.originalCurrency !== displayCurrency()
+              ? `<div class="orig">entered as ${formatAmount(t.originalAmount, t.originalCurrency)}</div>`
+              : '';
+          return `
+        <li class="tx">
+          <span class="tx-ico" style="background:${color}22;color:${color}">${esc(t.category[0])}</span>
+          <div class="tx-main">
+            <div class="tx-title">${esc(t.category)}</div>
+            <div class="tx-sub">${esc(date)}${t.note ? ' · ' + esc(t.note) : ''}</div>
+          </div>
+          <div style="display:flex;align-items:center">
+            <div class="tx-amt ${t.type === 'income' ? 'pos' : 'neg'}">${t.type === 'income' ? '+' : '−'}${money(t.amount)}${orig}</div>
+            ${editable ? `<button class="icon-btn del" data-del="${esc(t.id)}" title="Delete" aria-label="Delete">${ICONS.trash}</button>` : ''}
+          </div>
+        </li>`;
+        })
+        .join('')}
+    </ul>`;
 }
 
 function addFormHtml() {
   const today = new Date();
   const inMonth = state.month === today.toISOString().slice(0, 7);
   const date = inMonth ? today.toISOString().slice(0, 10) : `${state.month}-01`;
+  const symbol = displayCurrency() === 'NGN' ? '₦' : '$';
   return `
-    <div class="card" style="margin-bottom:16px">
-      <h2>Add a transaction</h2>
+    <div class="card" id="add-card">
+      <div class="card-head"><h2>New transaction</h2><span class="muted" style="font-size:13px">in ${displayCurrency()}</span></div>
       <form id="add">
-        <div class="seg" role="group">
+        <div class="type-toggle" role="group">
           <button type="button" data-type="expense" class="on">Expense</button>
           <button type="button" data-type="income">Income</button>
         </div>
         <input type="hidden" name="type" value="expense">
         <input type="hidden" name="currency" value="${displayCurrency()}">
+        <label>Amount (${symbol}) <input name="amount" type="number" step="0.01" min="0.01" required inputmode="decimal" placeholder="0.00"></label>
         <div class="form-row">
-          <label>Amount (${displayCurrency() === 'NGN' ? '₦' : '$'}) <input name="amount" type="number" step="0.01" min="0.01" required inputmode="decimal"></label>
           <label>Category <select name="category"></select></label>
           <label>Date <input name="date" type="date" value="${date}" required></label>
-          <label>Note (optional) <input name="note" maxlength="200"></label>
         </div>
+        <label>Note (optional) <input name="note" maxlength="200" placeholder="What was it for?"></label>
         <div class="error"></div>
-        <button class="btn" type="submit">Add</button>
+        <button class="btn block" type="submit">Add transaction</button>
       </form>
     </div>`;
 }
@@ -379,16 +451,16 @@ function bindAddForm(rerender) {
   const catSelect = form.querySelector('[name=category]');
   const setType = (type) => {
     typeInput.value = type;
-    form.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.type === type));
+    form.querySelectorAll('.type-toggle button').forEach((b) => b.classList.toggle('on', b.dataset.type === type));
     catSelect.innerHTML = state.info.categories[type].map((c) => `<option>${esc(c)}</option>`).join('');
   };
-  form.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => setType(b.dataset.type)));
+  form.querySelectorAll('.type-toggle button').forEach((b) => b.addEventListener('click', () => setType(b.dataset.type)));
   setType('expense');
 
   onSubmit(form, async (d) => {
     await api('/api/me/transactions', { method: 'POST', body: d });
     state.month = d.date.slice(0, 7);
-    toast('Saved');
+    toast('Transaction saved');
     rerender();
   });
 }
@@ -397,17 +469,28 @@ function bindAddForm(rerender) {
 
 async function renderMyDashboard() {
   const { summary, transactions: txs } = await api(`/api/me/dashboard?month=${state.month}`);
+  const u = state.info.user;
   app.innerHTML = `
     <div class="page-head">
-      <h1>Hi, ${esc(state.info.user.displayName)}</h1>
+      <div><div class="eyebrow">${greeting()}</div><h1>${esc(u.displayName.split(' ')[0])}</h1></div>
       ${monthPicker()}
     </div>
-    ${statsHtml(summary)}
-    ${addFormHtml()}
+    ${accountCard({
+      label: 'Total balance',
+      balance: summary.balance,
+      holderLabel: 'Account holder',
+      holder: u.displayName,
+      idLabel: 'Username',
+      id: u.username ? '@' + u.username : '',
+      month: summary,
+    })}
     ${chartsHtml(summary)}
-    <div class="card">
-      <h2>Transactions — ${esc(monthLabel(state.month))}</h2>
-      ${transactionsHtml(txs, { editable: true })}
+    <div class="grid-3-2 add-first">
+      <div class="card">
+        <div class="card-head"><h2>Transactions</h2><span class="muted" style="font-size:13px">${esc(monthLabel(state.month))}</span></div>
+        ${transactionsHtml(txs, { editable: true })}
+      </div>
+      ${addFormHtml()}
     </div>`;
   bindMonthPicker(renderMyDashboard);
   bindAddForm(renderMyDashboard);
@@ -415,7 +498,7 @@ async function renderMyDashboard() {
     b.addEventListener('click', async () => {
       if (!confirm('Delete this transaction?')) return;
       await api(`/api/me/transactions/${b.dataset.del}`, { method: 'DELETE' });
-      toast('Deleted');
+      toast('Transaction deleted');
       renderMyDashboard();
     }),
   );
@@ -423,31 +506,37 @@ async function renderMyDashboard() {
 
 // --- admin: team overview -------------------------------------------------
 
-function rateText() {
+function rateHtml() {
   const r = state.info.rates.NGN;
-  if (!r?.rate) return '<span class="neg">No exchange rate yet.</span> Set one below so members can use naira.';
+  if (!r?.rate) return '<p class="neg" style="margin:0 0 14px">No exchange rate yet. Set one below so members can use naira.</p>';
   const when = r.updatedAt ? ` · updated ${formatDateTime(r.updatedAt)}` : '';
   const kind = r.source === 'manual' ? 'Fixed rate set by you' : 'Live market rate';
-  return `<strong>$1 = ${formatAmount(r.rate * 100, 'NGN')}</strong> <span class="muted">(${kind}${when})</span>`;
+  return `<div class="rate-now"><b>$1 = ${formatAmount(r.rate * 100, 'NGN')}</b><span class="muted" style="font-size:13px">${kind}${when}</span></div>`;
 }
 
 async function renderTeam() {
   const data = await api(`/api/admin/overview?month=${state.month}`);
+  const active = data.members.filter((m) => m.status === 'active').length;
   const rows = data.members
     .map((m) => {
-      const invite =
-        m.status === 'invited'
-          ? `<div class="invite-box"><input readonly value="${esc(inviteLink(m.inviteToken))}"><button class="btn ghost small" data-copy="${esc(inviteLink(m.inviteToken))}">Copy</button></div>`
-          : '';
+      const link = m.status === 'invited' && m.inviteToken ? inviteLink(m.inviteToken) : '';
+      const invite = link
+        ? `<div class="invite-box"><input readonly value="${esc(link)}"><button class="btn ghost small" data-copy="${esc(link)}">Copy link</button></div>`
+        : '';
       return `
-      <tr class="clickable" data-open="${m.id}">
-        <td><strong>${esc(m.displayName)}</strong>${m.role === 'admin' ? ' <span class="pill">admin</span>' : ''}
-          <div class="muted" style="font-size:13px">${m.username ? '@' + esc(m.username) : 'Not signed up yet'}</div>${invite}</td>
+      <tr class="clickable" data-open="${esc(m.id)}">
+        <td>
+          <div class="person">
+            <span class="avatar ${m.role === 'admin' ? '' : 'blue'}">${esc(initials(m.displayName))}</span>
+            <div><strong>${esc(m.displayName)}</strong> ${m.role === 'admin' ? '<span class="pill role">Admin</span>' : ''}
+              <div class="sub">${m.username ? '@' + esc(m.username) : 'Not signed up yet'}</div>${invite}</div>
+          </div>
+        </td>
         <td><span class="pill ${m.status}">${m.status}</span></td>
         <td class="num pos">${money(m.income)}</td>
         <td class="num neg">${money(m.expense)}</td>
         <td class="num ${tone(m.net)}">${money(m.net, { sign: true })}</td>
-        <td class="num ${tone(m.balance)}">${money(m.balance)}</td>
+        <td class="num"><strong class="${tone(m.balance)}">${money(m.balance)}</strong></td>
         <td class="muted">${formatDateTime(m.lastLoginAt)}</td>
       </tr>`;
     })
@@ -455,37 +544,42 @@ async function renderTeam() {
 
   app.innerHTML = `
     <div class="page-head">
-      <h1>Team overview</h1>
+      <div><div class="eyebrow">Admin</div><h1>Team overview</h1></div>
       ${monthPicker()}
     </div>
-    <div class="stats">
-      <div class="card stat"><div class="label">Team balance (all time)</div><div class="value ${tone(data.team.balance)}">${money(data.team.balance)}</div></div>
-      <div class="card stat"><div class="label">Team income</div><div class="value pos">${money(data.team.income)}</div></div>
-      <div class="card stat"><div class="label">Team spending</div><div class="value neg">${money(data.team.expense)}</div></div>
-      <div class="card stat"><div class="label">Members</div><div class="value">${data.members.length}</div></div>
-    </div>
-    <div class="card" style="margin-bottom:16px">
-      <h2>Invite a team member</h2>
-      <form id="invite" class="form-row" style="align-items:end">
-        <label>Member's name <input name="displayName" required maxlength="60" placeholder="e.g. Ada Obi"></label>
-        <div style="margin-bottom:12px"><button class="btn" type="submit">Create invite link</button></div>
-      </form>
-      <p class="muted" style="font-size:13px;margin:0">Send them the link. The first time they open it they choose their own username and password.</p>
-    </div>
-    <div class="card" style="margin-bottom:16px">
-      <h2>Exchange rate</h2>
-      <p style="margin:0 0 12px">${rateText()}</p>
-      <form id="rate" class="form-row" style="align-items:end">
-        <label>Set a fixed rate (₦ per $1) <input name="rate" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="e.g. 1550"></label>
-        <div style="margin-bottom:12px;display:flex;gap:8px">
-          <button class="btn" type="submit">Use this rate</button>
-          ${state.info.rates.NGN?.source === 'manual' ? '<button class="btn ghost" type="button" id="rate-live">Use live rate</button>' : ''}
-        </div>
-      </form>
-      <div class="error" id="rate-error"></div>
+    ${accountCard({
+      label: 'Team balance',
+      balance: data.team.balance,
+      holderLabel: 'Team',
+      holder: state.info.teamName,
+      idLabel: 'Members',
+      id: `${active} active · ${data.members.length} total`,
+      month: { ...data.team, month: data.month },
+    })}
+    <div class="grid-2" style="margin-bottom:18px">
+      <div class="card">
+        <div class="card-head"><h2>Invite a team member</h2></div>
+        <form id="invite">
+          <label>Member's name <input name="displayName" required maxlength="60" placeholder="e.g. Ada Obi"></label>
+          <button class="btn blue" type="submit">Create invite link</button>
+        </form>
+        <p class="muted" style="font-size:13px;margin:14px 0 0">Send them the link. The first time they open it, they choose their own username and password.</p>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Exchange rate</h2></div>
+        ${rateHtml()}
+        <form id="rate">
+          <label>Set a fixed rate (₦ per $1) <input name="rate" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="e.g. 1550"></label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" type="submit">Use this rate</button>
+            ${state.info.rates.NGN?.source === 'manual' ? '<button class="btn ghost" type="button" id="rate-live">Use live rate</button>' : ''}
+          </div>
+          <div class="error"></div>
+        </form>
+      </div>
     </div>
     <div class="card">
-      <h2>Members — ${esc(monthLabel(state.month))}</h2>
+      <div class="card-head"><h2>Members</h2><span class="muted" style="font-size:13px">${esc(monthLabel(state.month))}</span></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Member</th><th>Status</th><th class="num">Income</th><th class="num">Spent</th><th class="num">Net</th><th class="num">Balance</th><th>Last login</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -513,7 +607,12 @@ async function renderTeam() {
       toast('Link copied');
     }),
   );
-  app.querySelectorAll('.invite-box input').forEach((i) => i.addEventListener('click', (e) => { e.stopPropagation(); i.select(); }));
+  app.querySelectorAll('.invite-box input').forEach((i) =>
+    i.addEventListener('click', (e) => {
+      e.stopPropagation();
+      i.select();
+    }),
+  );
   app.querySelectorAll('[data-open]').forEach((r) =>
     r.addEventListener('click', () => (location.hash = `#/team/${r.dataset.open}`)),
   );
@@ -531,31 +630,44 @@ async function renderMemberView(id) {
   const isSelf = id === state.info.user.id;
 
   app.innerHTML = `
-    <p style="margin:0 0 8px"><a href="#/team">&larr; Team</a></p>
+    <a class="back" href="#/team">&#8249; Team overview</a>
     <div class="page-head">
-      <h1>${esc(m.displayName)} <span class="pill ${m.status}">${m.status}</span></h1>
+      <div class="person">
+        <span class="avatar lg ${m.role === 'admin' ? '' : 'blue'}">${esc(initials(m.displayName))}</span>
+        <div><h1 style="margin:0">${esc(m.displayName)}</h1>
+          <div class="muted" style="font-size:14px">${m.username ? '@' + esc(m.username) + ' · ' : ''}<span class="pill ${m.status}">${m.status}</span> · Last login ${formatDateTime(m.lastLoginAt)}</div>
+        </div>
+      </div>
       ${monthPicker()}
     </div>
-    <p class="muted" style="margin:-12px 0 16px;font-size:14px">
-      ${m.username ? '@' + esc(m.username) + ' · ' : ''}Last login ${formatDateTime(m.lastLoginAt)}
-    </p>
-    ${statsHtml(summary)}
+    ${accountCard({
+      label: 'Total balance',
+      balance: summary.balance,
+      holderLabel: 'Account holder',
+      holder: m.displayName,
+      idLabel: 'Username',
+      id: m.username ? '@' + m.username : '',
+      month: summary,
+    })}
     ${chartsHtml(summary)}
-    <div class="card" style="margin-bottom:16px">
-      <h2>Transactions — ${esc(monthLabel(state.month))}</h2>
-      ${transactionsHtml(txs, { editable: false })}
-    </div>
-    ${
-      isSelf
-        ? ''
-        : `<div class="card">
-      <h2>Manage access</h2>
-      <p class="muted" style="font-size:14px;margin-top:0">Forgot their password? Reset it to get a new invite link — they'll choose a new username and password. Their money data is kept.</p>
-      <button class="btn ghost" id="reset">Reset login &amp; get new link</button>
-      <button class="btn danger" id="toggle">${m.status === 'deactivated' ? 'Reactivate' : 'Deactivate'}</button>
-      <div id="reset-out"></div>
-    </div>`
-    }`;
+    <div class="${isSelf ? '' : 'grid-3-2'}">
+      <div class="card">
+        <div class="card-head"><h2>Transactions</h2><span class="muted" style="font-size:13px">${esc(monthLabel(state.month))}</span></div>
+        ${transactionsHtml(txs, { editable: false })}
+      </div>
+      ${
+        isSelf
+          ? ''
+          : `<div class="card" style="align-self:start">
+        <div class="card-head"><h2>Manage access</h2></div>
+        <p class="muted" style="font-size:14px;margin-top:0">Forgot their password? Reset it to get a new invite link — they'll choose a new username and password. Their money data is kept.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn ghost" id="reset">Reset login</button>
+          <button class="btn danger" id="toggle">${m.status === 'deactivated' ? 'Reactivate' : 'Deactivate'}</button>
+        </div>
+      </div>`
+      }
+    </div>`;
 
   bindMonthPicker(() => renderMemberView(id));
   if (isSelf) return;
@@ -563,12 +675,12 @@ async function renderMemberView(id) {
     if (!confirm(`Reset ${m.displayName}'s login? Their current password stops working.`)) return;
     const { inviteToken } = await api(`/api/admin/members/${id}/reset`, { method: 'POST' });
     await navigator.clipboard?.writeText(inviteLink(inviteToken)).catch(() => {});
-    toast('New link created and copied');
+    toast('New invite link created and copied');
     await renderMemberView(id);
   });
   app.querySelector('#toggle').addEventListener('click', async () => {
     const activate = m.status === 'deactivated';
-    if (!activate && !confirm(`Deactivate ${m.displayName}? They will not be able to log in.`)) return;
+    if (!activate && !confirm(`Deactivate ${m.displayName}? They will not be able to sign in.`)) return;
     await api(`/api/admin/members/${id}`, { method: 'PATCH', body: { active: activate } });
     toast(activate ? 'Reactivated' : 'Deactivated');
     renderMemberView(id);
@@ -580,26 +692,35 @@ async function renderMemberView(id) {
 function renderAccount() {
   const u = state.info.user;
   app.innerHTML = `
-    <div class="card auth-card" style="margin-top:0">
-      <h1>Account</h1>
-      <p class="sub">${esc(u.displayName)} · @${esc(u.username)}</p>
-      <form id="f">
-        <label>Current password <input name="currentPassword" type="password" required autocomplete="current-password"></label>
-        <label>New password <input name="newPassword" type="password" required minlength="8" autocomplete="new-password"></label>
-        <label>Confirm new password <input name="confirm" type="password" required autocomplete="new-password"></label>
-        <div class="error"></div>
-        <button class="btn block" type="submit">Change password</button>
-      </form>
+    <div class="page-head"><div><div class="eyebrow">Settings</div><h1>Account</h1></div></div>
+    <div class="grid-2">
+      <div class="card" style="align-self:start">
+        <div class="person" style="margin-bottom:18px">
+          <span class="avatar lg">${esc(initials(u.displayName))}</span>
+          <div><strong style="font-size:17px">${esc(u.displayName)}</strong><div class="muted">@${esc(u.username)} · ${u.role === 'admin' ? 'Admin' : 'Member'}</div></div>
+        </div>
+        <p class="muted" style="font-size:14px;margin:0">Your data is private to you. Only the team admin can view it.</p>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Change password</h2></div>
+        <form id="f">
+          <label>Current password <input name="currentPassword" type="password" required autocomplete="current-password"></label>
+          <label>New password <input name="newPassword" type="password" required minlength="8" autocomplete="new-password"></label>
+          <label>Confirm new password <input name="confirm" type="password" required autocomplete="new-password"></label>
+          <div class="error"></div>
+          <button class="btn" type="submit">Update password</button>
+        </form>
+      </div>
     </div>`;
   onSubmit(app.querySelector('#f'), async (d) => {
     if (d.newPassword !== d.confirm) throw new Error('Passwords do not match.');
     await api('/api/me/password', { method: 'POST', body: d });
     app.querySelector('#f').reset();
-    toast('Password changed');
+    toast('Password updated');
   });
 }
 
-// Any 401 mid-session (expired cookie) sends the user back to login.
+// Any 401 mid-session (expired cookie) sends the user back to sign in.
 window.addEventListener('unhandledrejection', (e) => {
   if (e.reason?.status === 401) {
     e.preventDefault();

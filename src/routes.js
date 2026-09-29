@@ -150,7 +150,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
     const [hasAdmin, teamName, rate] = await Promise.all([adminExists(), store.getSetting('team_name'), ngnRate()]);
     res.json({
       setupNeeded: !hasAdmin,
-      teamName: teamName || 'Prime Money',
+      teamName: teamName || 'Team Prime',
       baseCurrency: 'USD',
       rates: { NGN: rate },
       user: req.user ? publicUser(req.user) : null,
@@ -167,7 +167,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
       return res.status(400).json({ error: 'Your name is required.' });
     }
 
-    await store.setSetting('team_name', (String(teamName ?? '').trim() || 'Prime Money').slice(0, 60));
+    await store.setSetting('team_name', (String(teamName ?? '').trim() || 'Team Prime').slice(0, 60));
     const admin = await store.createUser({
       displayName: displayName.trim().slice(0, 60),
       username: username.toLowerCase(),
@@ -220,7 +220,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
   app.get('/api/invite/:token', async (req, res) => {
     const user = await inviteUser(req.params.token);
     if (!user) return res.status(404).json(INVALID_INVITE);
-    res.json({ displayName: user.displayName, teamName: (await store.getSetting('team_name')) || 'Prime Money' });
+    res.json({ displayName: user.displayName, teamName: (await store.getSetting('team_name')) || 'Team Prime' });
   });
 
   app.post('/api/invite/:token', async (req, res) => {
