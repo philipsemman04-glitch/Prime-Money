@@ -11,7 +11,7 @@ A private money-management platform for a team.
 
 ## Where the data lives
 
-All data is stored in Notion, under the private page **Prime Money — App Database**, in three tables:
+All data is stored in Notion, under the private page **Prime Money — App Database**, in four tables:
 
 | Table            | What's in it                                                                 |
 | ---------------- | ---------------------------------------------------------------------------- |
