@@ -9,6 +9,57 @@ const EXPENSE_CATEGORIES = [
   'Entertainment', 'Shopping', 'Family', 'Savings', 'Debt', 'Other',
 ];
 const CURRENCIES = ['USD', 'NGN'];
+const FUND_REQUEST_CATEGORY = 'Fund request';
+
+// Every income is split into these pots. Expenses and approved fund
+// requests are taken out of one pot (expenses default to personal).
+const POTS = ['business', 'personal', 'savings', 'investment'];
+const DEFAULT_ALLOCATION = { business: 30, personal: 30, savings: 20, investment: 20 };
+
+function parseAllocation(raw) {
+  try {
+    const a = JSON.parse(raw);
+    if (POTS.every((p) => Number.isFinite(a?.[p])) && POTS.reduce((s, p) => s + a[p], 0) === 100) return a;
+  } catch {}
+  return { ...DEFAULT_ALLOCATION };
+}
+
+function computePots(txs, allocation, requests = []) {
+  const income = txs.filter((t) => t.type === 'income').reduce((s, t) => s + t.amountCents, 0);
+  return POTS.map((pot) => {
+    const allocated = Math.round((income * allocation[pot]) / 100);
+    const spent = txs
+      .filter((t) => t.type === 'expense' && (t.pot || 'personal') === pot)
+      .reduce((s, t) => s + t.amountCents, 0);
+    const pending = requests
+      .filter((r) => r.status === 'pending' && r.pot === pot)
+      .reduce((s, r) => s + r.amountCents, 0);
+    return { pot, percent: allocation[pot], allocated, spent, available: allocated - spent, pending };
+  });
+}
+
+function publicRequest(r, member) {
+  return {
+    id: r.id,
+    title: r.title,
+    pot: r.pot,
+    amount: r.amountCents,
+    originalCurrency: r.origCurrency,
+    originalAmount: r.origAmountCents,
+    items: r.items,
+    reason: r.reason,
+    bankName: r.bankName,
+    accountNumber: r.accountNumber,
+    accountName: r.accountName,
+    status: r.status,
+    adminNote: r.adminNote,
+    decidedAt: r.decidedAt,
+    createdAt: r.createdAt,
+    ...(member ? { member: { id: member.id, displayName: member.displayName, username: member.username } } : {}),
+  };
+}
+
+const byNewest = (a, b) => String(b.createdAt).localeCompare(String(a.createdAt));
 
 const LOGIN_MAX_FAILURES = 8;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
@@ -80,12 +131,21 @@ function publicTransactions(txs, month) {
       category: t.category,
       note: t.note,
       date: t.date,
+      pot: t.type === 'expense' ? t.pot || 'personal' : null,
     }));
 }
 
 async function dashboardFor(store, userId, month) {
-  const txs = await store.listTransactions({ userId });
-  return { summary: summarize(txs, month), transactions: publicTransactions(txs, month) };
+  const [txs, requests, rawAllocation] = await Promise.all([
+    store.listTransactions({ userId }),
+    store.listRequests({ userId, status: 'pending' }),
+    store.getSetting('allocation'),
+  ]);
+  return {
+    summary: summarize(txs, month),
+    pots: computePots(txs, parseAllocation(rawAllocation), requests),
+    transactions: publicTransactions(txs, month),
+  };
 }
 
 function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate } = {}) {
@@ -147,8 +207,17 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
   // --- public / auth ----------------------------------------------------
 
   app.get('/api/state', async (req, res) => {
-    const [hasAdmin, teamName, rate] = await Promise.all([adminExists(), store.getSetting('team_name'), ngnRate()]);
+    const [hasAdmin, teamName, rate, rawAllocation, pending] = await Promise.all([
+      adminExists(),
+      store.getSetting('team_name'),
+      ngnRate(),
+      store.getSetting('allocation'),
+      req.user?.role === 'admin' ? store.listRequests({ status: 'pending' }) : null,
+    ]);
     res.json({
+      allocation: parseAllocation(rawAllocation),
+      pots: POTS,
+      pendingRequests: pending ? pending.length : undefined,
       setupNeeded: !hasAdmin,
       teamName: teamName || 'Team Prime',
       baseCurrency: 'USD',
@@ -252,8 +321,9 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
   });
 
   app.post('/api/me/transactions', requireUser, async (req, res) => {
-    const { type, amount, currency = 'USD', category, note = '', date } = req.body ?? {};
+    const { type, amount, currency = 'USD', category, note = '', date, pot = 'personal' } = req.body ?? {};
     if (type !== 'income' && type !== 'expense') return res.status(400).json({ error: 'Type must be income or expense.' });
+    if (type === 'expense' && !POTS.includes(pot)) return res.status(400).json({ error: 'Pick which pot this came from.' });
     if (!CURRENCIES.includes(currency)) return res.status(400).json({ error: 'Currency must be USD or NGN.' });
     const origCents = Math.round(Number(amount) * 100);
     if (!Number.isFinite(origCents) || origCents <= 0 || origCents > 1e14) {
@@ -283,6 +353,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
       category,
       note: note.trim(),
       date,
+      pot: type === 'expense' ? pot : null,
     });
     res.status(201).json({ id: tx.id });
   });
@@ -290,6 +361,9 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
   app.delete('/api/me/transactions/:id', requireUser, async (req, res) => {
     const tx = await store.getTransaction(req.params.id);
     if (!tx || tx.userId !== req.user.id) return res.status(404).json({ error: 'Transaction not found.' });
+    if (tx.category === FUND_REQUEST_CATEGORY) {
+      return res.status(400).json({ error: 'Approved fund requests cannot be deleted.' });
+    }
     await store.deleteTransaction(tx.id);
     res.json({ ok: true });
   });
@@ -305,6 +379,72 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
     const patch = { passwordHash: auth.hashPassword(newPassword), sessionVersion: (req.user.sessionVersion ?? 0) + 1 };
     await store.updateUser(req.user.id, patch);
     await startSession(res, { ...req.user, ...patch });
+    res.json({ ok: true });
+  });
+
+  // --- fund requests (member side) -------------------------------------
+
+  app.get('/api/me/requests', requireUser, async (req, res) => {
+    const requests = await store.listRequests({ userId: req.user.id });
+    res.json(requests.sort(byNewest).map((r) => publicRequest(r)));
+  });
+
+  app.post('/api/me/requests', requireUser, async (req, res) => {
+    const { pot, items, currency = 'USD', reason = '', bankName, accountNumber, accountName } = req.body ?? {};
+    if (!POTS.includes(pot)) return res.status(400).json({ error: 'Pick which pot the money should come from.' });
+    if (!CURRENCIES.includes(currency)) return res.status(400).json({ error: 'Currency must be USD or NGN.' });
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Add at least one item.' });
+    if (items.length > 20) return res.status(400).json({ error: 'A request can have at most 20 items.' });
+    const cleanItems = [];
+    for (const item of items) {
+      const name = typeof item?.name === 'string' ? item.name.trim() : '';
+      const price = Math.round(Number(item?.price) * 100);
+      if (!name || name.length > 80) return res.status(400).json({ error: 'Each item needs a name (up to 80 characters).' });
+      if (!Number.isFinite(price) || price <= 0 || price > 1e14) {
+        return res.status(400).json({ error: `Enter a price for "${name}".` });
+      }
+      cleanItems.push({ name, price });
+    }
+    const clean = (v) => (typeof v === 'string' ? v.trim() : '');
+    const bank = clean(bankName);
+    const number = clean(accountNumber).replace(/\s+/g, '');
+    const holder = clean(accountName);
+    if (bank.length < 2 || bank.length > 60) return res.status(400).json({ error: 'Enter the bank name.' });
+    if (!/^[A-Za-z0-9]{6,34}$/.test(number)) return res.status(400).json({ error: 'Enter a valid account number.' });
+    if (holder.length < 2 || holder.length > 80) return res.status(400).json({ error: 'Enter the name on the account.' });
+    if (typeof reason !== 'string' || reason.length > 300) return res.status(400).json({ error: 'Reason is too long.' });
+
+    const origCents = cleanItems.reduce((s, i) => s + i.price, 0);
+    let usdCents = origCents;
+    if (currency === 'NGN') {
+      const { rate } = await ngnRate();
+      if (!rate) return res.status(503).json({ error: 'No USD/NGN exchange rate is available yet. Ask your admin to set one.' });
+      usdCents = Math.max(1, Math.round(origCents / rate));
+    }
+
+    const title = cleanItems.length === 1 ? cleanItems[0].name : `${cleanItems[0].name} + ${cleanItems.length - 1} more`;
+    const request = await store.createRequest({
+      userId: req.user.id,
+      title,
+      pot,
+      amountCents: usdCents,
+      origCurrency: currency,
+      origAmountCents: origCents,
+      items: cleanItems,
+      reason: reason.trim(),
+      bankName: bank,
+      accountNumber: number,
+      accountName: holder,
+    });
+    res.status(201).json(publicRequest(request));
+  });
+
+  // A member can withdraw a request while it is still pending.
+  app.delete('/api/me/requests/:id', requireUser, async (req, res) => {
+    const request = await store.getRequest(req.params.id);
+    if (!request || request.userId !== req.user.id) return res.status(404).json({ error: 'Request not found.' });
+    if (request.status !== 'pending') return res.status(400).json({ error: 'Only pending requests can be cancelled.' });
+    await store.deleteRequest(request.id);
     res.json({ ok: true });
   });
 
@@ -358,6 +498,85 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate 
       sessionVersion: 0,
     });
     res.status(201).json({ id: user.id, inviteToken: token });
+  });
+
+  // --- admin: fund requests -------------------------------------------
+
+  app.get('/api/admin/requests', requireUser, requireAdmin, async (req, res) => {
+    const [users, requests, txs, rawAllocation] = await Promise.all([
+      store.listUsers(),
+      store.listRequests(),
+      store.listTransactions(),
+      store.getSetting('allocation'),
+    ]);
+    const allocation = parseAllocation(rawAllocation);
+    const usersById = new Map(users.map((u) => [u.id, u]));
+    const potsByUser = new Map();
+    const potsFor = (userId) => {
+      if (!potsByUser.has(userId)) {
+        potsByUser.set(userId, computePots(txs.filter((t) => t.userId === userId), allocation, requests.filter((r) => r.userId === userId)));
+      }
+      return potsByUser.get(userId);
+    };
+    res.json(
+      requests.sort(byNewest).map((r) => ({
+        ...publicRequest(r, usersById.get(r.userId)),
+        potAvailable: r.status === 'pending' ? potsFor(r.userId).find((p) => p.pot === r.pot)?.available ?? 0 : undefined,
+      })),
+    );
+  });
+
+  app.post('/api/admin/requests/:id/decision', requireUser, requireAdmin, async (req, res) => {
+    const { decision, note = '' } = req.body ?? {};
+    if (decision !== 'approve' && decision !== 'decline') return res.status(400).json({ error: 'Choose approve or decline.' });
+    if (typeof note !== 'string' || note.length > 300) return res.status(400).json({ error: 'Note is too long.' });
+    const request = await store.getRequest(req.params.id);
+    if (!request) return res.status(404).json({ error: 'Request not found.' });
+    if (request.status !== 'pending') return res.status(409).json({ error: `This request was already ${request.status}.` });
+
+    const decidedAt = new Date().toISOString();
+    if (decision === 'decline') {
+      await store.updateRequest(request.id, { status: 'declined', adminNote: note.trim(), decidedAt });
+      return res.json({ ok: true, status: 'declined' });
+    }
+
+    // Approval takes the money out of the member's pot by recording an expense.
+    const member = await store.getUser(request.userId);
+    const tx = await store.createTransaction({
+      userId: request.userId,
+      memberName: member?.displayName ?? 'Member',
+      type: 'expense',
+      amountCents: request.amountCents,
+      origCurrency: request.origCurrency,
+      origAmountCents: request.origAmountCents,
+      category: FUND_REQUEST_CATEGORY,
+      note: request.title,
+      date: decidedAt.slice(0, 10),
+      pot: request.pot,
+    });
+    await store.updateRequest(request.id, {
+      status: 'approved',
+      adminNote: note.trim(),
+      decidedAt,
+      transactionId: tx.id,
+    });
+    res.json({ ok: true, status: 'approved' });
+  });
+
+  app.put('/api/admin/allocation', requireUser, requireAdmin, async (req, res) => {
+    const allocation = {};
+    for (const pot of POTS) {
+      const value = Number(req.body?.[pot]);
+      if (!Number.isInteger(value) || value < 0 || value > 100) {
+        return res.status(400).json({ error: 'Each percentage must be a whole number from 0 to 100.' });
+      }
+      allocation[pot] = value;
+    }
+    if (POTS.reduce((s, p) => s + allocation[p], 0) !== 100) {
+      return res.status(400).json({ error: 'The percentages must add up to 100.' });
+    }
+    await store.setSetting('allocation', JSON.stringify(allocation));
+    res.json(allocation);
   });
 
   // Pin a fixed USD->NGN rate, or pass null to go back to the live rate.

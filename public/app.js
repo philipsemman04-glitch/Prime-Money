@@ -99,8 +99,27 @@ const ICONS = {
   down: svg('<path d="M17 7 7 17"/><path d="M16 17H7V8"/>'),
   net: svg('<path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/>'),
   trash: svg('<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>', 16),
+  send: svg('<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/>'),
+  briefcase: svg('<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>'),
+  heart: svg('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>'),
+  lock: svg('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
+  chart: svg('<path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-5"/>'),
+  copy: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>', 15),
+  plus: svg('<path d="M12 5v14"/><path d="M5 12h14"/>', 16),
+  x: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', 16),
   inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>', 28),
 };
+
+const POT_META = {
+  business: { label: 'Business', color: '#5b9bff', icon: ICONS.briefcase },
+  personal: { label: 'Personal', color: '#a78bfa', icon: ICONS.heart },
+  savings: { label: 'Savings', color: '#3ecf8e', icon: ICONS.lock },
+  investment: { label: 'Investment', color: '#e3b448', icon: ICONS.chart },
+};
+const potLabel = (pot) => POT_META[pot]?.label ?? pot;
+const potPill = (pot) =>
+  `<span class="pot-pill" style="color:${POT_META[pot]?.color};background:${POT_META[pot]?.color}1f">${esc(potLabel(pot))}</span>`;
+const statusPill = (status) => `<span class="pill ${status}">${esc(status)}</span>`;
 
 function toast(message) {
   const el = document.getElementById('toast');
@@ -176,16 +195,33 @@ function renderShell() {
     .join('');
 
   const route = location.hash || '#/';
+  const pending = state.info.pendingRequests || 0;
   const links = [['#/', 'My money', ICONS.wallet]];
   if (user.role === 'admin') links.push(['#/team', 'Team', ICONS.team]);
+  links.push(['#/requests', 'Requests', ICONS.send, user.role === 'admin' ? pending : 0]);
   links.push(['#/account', 'Account', ICONS.user]);
   document.getElementById('nav').innerHTML = links
-    .map(([href, text, icon]) => {
+    .map(([href, text, icon, badge]) => {
       const active = href === '#/' ? route === '#/' : route.startsWith(href);
-      return `<a href="${href}" class="${active ? 'active' : ''}">${icon}<span>${text}</span></a>`;
+      return `<a href="${href}" class="${active ? 'active' : ''}"><span class="nav-ico">${icon}${badge ? `<span class="badge">${badge}</span>` : ''}</span><span>${text}</span></a>`;
     })
     .join('');
+  document.title = (pending && user.role === 'admin' ? `(${pending}) ` : '') + teamName;
 }
+
+// The admin is notified of new fund requests: the badge and tab title update
+// every minute, with a toast when the count goes up.
+setInterval(async () => {
+  if (state.info?.user?.role !== 'admin' || document.hidden) return;
+  try {
+    const before = state.info.pendingRequests || 0;
+    const next = await api('/api/state');
+    if (!next.user) return;
+    state.info = next;
+    if ((next.pendingRequests || 0) > before) toast('New fund request waiting for you');
+    renderShell();
+  } catch {}
+}, 60_000);
 
 document.getElementById('currency').addEventListener('click', (e) => {
   const c = e.target.closest('[data-cur]')?.dataset.cur;
@@ -222,6 +258,8 @@ function route() {
   const member = hash.match(/^#\/team\/([\w-]+)$/);
   if (member && user.role === 'admin') return renderMemberView(member[1]);
   if (hash === '#/team' && user.role === 'admin') return renderTeam();
+  if (hash.startsWith('#/requests/new')) return renderNewRequest(new URLSearchParams(hash.split('?')[1] || '').get('pot'));
+  if (hash === '#/requests') return user.role === 'admin' ? renderReviewRequests() : renderMyRequests();
   if (hash === '#/account') return renderAccount();
   return renderMyDashboard();
 }
@@ -341,6 +379,33 @@ function accountCard({ label, balance, holderLabel, holder, idLabel, id, month }
     </section>`;
 }
 
+function potsHtml(pots, { canRequest, title = 'My pots' }) {
+  return `
+    <section class="card" style="margin-bottom:18px">
+      <div class="card-head">
+        <div><h2>${title}</h2><div class="muted" style="font-size:13px">Every income is split ${pots.map((p) => `${p.percent}% ${potLabel(p.pot).toLowerCase()}`).join(' · ')}</div></div>
+        ${canRequest ? `<a class="btn" href="#/requests/new">${ICONS.send} Request funds</a>` : ''}
+      </div>
+      <div class="pots">
+        ${pots
+          .map((p) => {
+            const meta = POT_META[p.pot];
+            const used = p.allocated > 0 ? Math.min(100, Math.max(0, (p.spent / p.allocated) * 100)) : 0;
+            return `
+          <div class="pot" style="--pot:${meta.color}">
+            <div class="pot-top"><span class="pot-ico">${meta.icon}</span><span class="pot-pct">${p.percent}%</span></div>
+            <div class="pot-name">${meta.label}</div>
+            <div class="pot-amt ${p.available < 0 ? 'neg' : ''}">${money(p.available)}</div>
+            <div class="pot-track"><div style="width:${100 - used}%"></div></div>
+            <div class="pot-sub">${money(p.spent)} used of ${money(p.allocated)}${p.pending ? ` · <span style="color:var(--gold)">${money(p.pending)} pending</span>` : ''}</div>
+            ${canRequest ? `<a class="pot-link" href="#/requests/new?pot=${p.pot}">Request from ${meta.label.toLowerCase()} &#8250;</a>` : ''}
+          </div>`;
+          })
+          .join('')}
+      </div>
+    </section>`;
+}
+
 function chartsHtml(s) {
   const max = Math.max(1, ...s.trend.flatMap((t) => [t.income, t.expense]));
   const trend = s.trend
@@ -406,11 +471,11 @@ function transactionsHtml(list, { editable }) {
           <span class="tx-ico" style="background:${color}22;color:${color}">${esc(t.category[0])}</span>
           <div class="tx-main">
             <div class="tx-title">${esc(t.category)}</div>
-            <div class="tx-sub">${esc(date)}${t.note ? ' · ' + esc(t.note) : ''}</div>
+            <div class="tx-sub">${esc(date)}${t.pot ? ' · ' + esc(potLabel(t.pot)) : ''}${t.note ? ' · ' + esc(t.note) : ''}</div>
           </div>
           <div style="display:flex;align-items:center">
             <div class="tx-amt ${t.type === 'income' ? 'pos' : 'neg'}">${t.type === 'income' ? '+' : '−'}${money(t.amount)}${orig}</div>
-            ${editable ? `<button class="icon-btn del" data-del="${esc(t.id)}" title="Delete" aria-label="Delete">${ICONS.trash}</button>` : ''}
+            ${editable && t.category !== 'Fund request' ? `<button class="icon-btn del" data-del="${esc(t.id)}" title="Delete" aria-label="Delete">${ICONS.trash}</button>` : ''}
           </div>
         </li>`;
         })
@@ -438,6 +503,9 @@ function addFormHtml() {
           <label>Category <select name="category"></select></label>
           <label>Date <input name="date" type="date" value="${date}" required></label>
         </div>
+        <label class="pot-field">Paid from pot
+          <select name="pot">${state.info.pots.map((p) => `<option value="${p}" ${p === 'personal' ? 'selected' : ''}>${potLabel(p)}</option>`).join('')}</select>
+        </label>
         <label>Note (optional) <input name="note" maxlength="200" placeholder="What was it for?"></label>
         <div class="error"></div>
         <button class="btn block" type="submit">Add transaction</button>
@@ -453,6 +521,7 @@ function bindAddForm(rerender) {
     typeInput.value = type;
     form.querySelectorAll('.type-toggle button').forEach((b) => b.classList.toggle('on', b.dataset.type === type));
     catSelect.innerHTML = state.info.categories[type].map((c) => `<option>${esc(c)}</option>`).join('');
+    form.querySelector('.pot-field').hidden = type !== 'expense';
   };
   form.querySelectorAll('.type-toggle button').forEach((b) => b.addEventListener('click', () => setType(b.dataset.type)));
   setType('expense');
@@ -468,7 +537,7 @@ function bindAddForm(rerender) {
 // --- personal dashboard ---------------------------------------------------
 
 async function renderMyDashboard() {
-  const { summary, transactions: txs } = await api(`/api/me/dashboard?month=${state.month}`);
+  const { summary, pots, transactions: txs } = await api(`/api/me/dashboard?month=${state.month}`);
   const u = state.info.user;
   app.innerHTML = `
     <div class="page-head">
@@ -484,6 +553,7 @@ async function renderMyDashboard() {
       id: u.username ? '@' + u.username : '',
       month: summary,
     })}
+    ${potsHtml(pots, { canRequest: u.role !== 'admin' })}
     ${chartsHtml(summary)}
     <div class="grid-3-2 add-first">
       <div class="card">
@@ -556,6 +626,11 @@ async function renderTeam() {
       id: `${active} active · ${data.members.length} total`,
       month: { ...data.team, month: data.month },
     })}
+    ${
+      state.info.pendingRequests
+        ? `<a class="banner" href="#/requests">${ICONS.send}<span><b>${state.info.pendingRequests} fund request${state.info.pendingRequests > 1 ? 's' : ''}</b> waiting for your approval</span><span class="go">Review &#8250;</span></a>`
+        : ''
+    }
     <div class="grid-2" style="margin-bottom:18px">
       <div class="card">
         <div class="card-head"><h2>Invite a team member</h2></div>
@@ -578,6 +653,24 @@ async function renderTeam() {
         </form>
       </div>
     </div>
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head"><div><h2>Income split</h2><div class="muted" style="font-size:13px">How every member's income is divided. Must add up to 100%.</div></div></div>
+      <form id="alloc">
+        <div class="alloc-row">
+          ${state.info.pots
+            .map(
+              (p) => `<label style="--pot:${POT_META[p].color}"><span><span class="dot"></span>${potLabel(p)}</span>
+                <div class="price"><input name="${p}" type="number" min="0" max="100" step="1" value="${state.info.allocation[p]}" required><span>%</span></div></label>`,
+            )
+            .join('')}
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <button class="btn" type="submit">Save split</button>
+          <span class="muted" id="alloc-sum" style="font-size:13px"></span>
+        </div>
+        <div class="error"></div>
+      </form>
+    </div>
     <div class="card">
       <div class="card-head"><h2>Members</h2><span class="muted" style="font-size:13px">${esc(monthLabel(state.month))}</span></div>
       <div class="table-wrap"><table>
@@ -593,6 +686,20 @@ async function renderTeam() {
     route();
   };
   onSubmit(app.querySelector('#rate'), (d) => saveRate(d.rate));
+  const allocForm = app.querySelector('#alloc');
+  const showSum = () => {
+    const sum = state.info.pots.reduce((s, p) => s + (Number(allocForm.elements[p].value) || 0), 0);
+    const el = allocForm.querySelector('#alloc-sum');
+    el.textContent = `Total: ${sum}%`;
+    el.className = sum === 100 ? 'pos' : 'neg';
+  };
+  allocForm.addEventListener('input', showSum);
+  showSum();
+  onSubmit(allocForm, async (d) => {
+    const body = Object.fromEntries(state.info.pots.map((p) => [p, Number(d[p])]));
+    state.info.allocation = await api('/api/admin/allocation', { method: 'PUT', body });
+    toast('Income split saved');
+  });
   app.querySelector('#rate-live')?.addEventListener('click', () => saveRate(null).catch((e) => toast(e.message)));
   onSubmit(app.querySelector('#invite'), async (d) => {
     const { inviteToken } = await api('/api/admin/members', { method: 'POST', body: d });
@@ -626,7 +733,7 @@ async function renderMemberView(id) {
     app.innerHTML = `<div class="card"><p>${esc(err.message)}</p><a href="#/team">Back to team</a></div>`;
     return;
   }
-  const { summary, transactions: txs, member: m } = data;
+  const { summary, pots, transactions: txs, member: m } = data;
   const isSelf = id === state.info.user.id;
 
   app.innerHTML = `
@@ -649,6 +756,7 @@ async function renderMemberView(id) {
       id: m.username ? '@' + m.username : '',
       month: summary,
     })}
+    ${potsHtml(pots, { canRequest: false, title: 'Pots' })}
     ${chartsHtml(summary)}
     <div class="${isSelf ? '' : 'grid-3-2'}">
       <div class="card">
@@ -685,6 +793,211 @@ async function renderMemberView(id) {
     toast(activate ? 'Reactivated' : 'Deactivated');
     renderMemberView(id);
   });
+}
+
+// --- fund requests ------------------------------------------------------
+
+function itemsTable(r) {
+  return `
+    <table class="items">
+      <tbody>
+        ${r.items.map((i) => `<tr><td>${esc(i.name)}</td><td class="num">${formatAmount(i.price, r.originalCurrency)}</td></tr>`).join('')}
+        <tr class="total"><td>Total</td><td class="num">${formatAmount(r.originalAmount, r.originalCurrency)}${
+          r.originalCurrency !== 'USD' ? `<div class="muted" style="font-size:12px;font-weight:500">≈ ${formatAmount(r.amount, 'USD')}</div>` : ''
+        }</td></tr>
+      </tbody>
+    </table>`;
+}
+
+async function renderNewRequest(preselect) {
+  const { pots } = await api(`/api/me/dashboard?month=${state.month}`);
+  const cur = displayCurrency();
+  const symbol = cur === 'NGN' ? '₦' : '$';
+  const chosen = pots.some((p) => p.pot === preselect) ? preselect : 'business';
+
+  app.innerHTML = `
+    <a class="back" href="#/">&#8249; My money</a>
+    <div class="page-head"><div><div class="eyebrow">Fund request</div><h1>Request funds</h1></div></div>
+    <form id="req" class="grid-3-2">
+      <div class="stack">
+        <div class="card">
+          <div class="card-head"><h2>1. Which pot?</h2></div>
+          <div class="pot-choice">
+            ${pots
+              .map(
+                (p) => `
+              <label class="pot-radio" style="--pot:${POT_META[p.pot].color}">
+                <input type="radio" name="pot" value="${p.pot}" ${p.pot === chosen ? 'checked' : ''}>
+                <span class="pot-ico">${POT_META[p.pot].icon}</span>
+                <span><b>${potLabel(p.pot)}</b><small>${money(p.available)} available</small></span>
+              </label>`,
+              )
+              .join('')}
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>2. What do you need?</h2><span class="muted" style="font-size:13px">Prices in ${cur}</span></div>
+          <div id="items"></div>
+          <button type="button" class="btn ghost small" id="add-item">${ICONS.plus} Add item</button>
+          <div class="req-total"><span>Total</span><b id="total">${formatAmount(0, cur)}</b></div>
+          <div id="over" class="warn" hidden></div>
+          <label style="margin-top:14px">Reason (optional) <input name="reason" maxlength="300" placeholder="What is this for?"></label>
+        </div>
+      </div>
+      <div class="card" style="align-self:start">
+        <div class="card-head"><h2>3. Pay to</h2></div>
+        <label>Bank name <input name="bankName" required maxlength="60" placeholder="e.g. GTBank"></label>
+        <label>Account number <input name="accountNumber" required inputmode="numeric" maxlength="34" placeholder="10-digit account number"></label>
+        <label>Account name <input name="accountName" required maxlength="80" value="${esc(state.info.user.displayName)}"></label>
+        <div class="error"></div>
+        <button class="btn block" type="submit">${ICONS.send} Send request</button>
+        <p class="muted" style="font-size:13px;margin:12px 0 0">Your admin gets a notification and will approve or decline it. Approved money comes out of the pot you chose.</p>
+      </div>
+    </form>`;
+
+  const form = app.querySelector('#req');
+  const itemsEl = form.querySelector('#items');
+  const addRow = () => {
+    const row = document.createElement('div');
+    row.className = 'item-row';
+    row.innerHTML = `
+      <input class="i-name" placeholder="Item (e.g. Laptop)" maxlength="80" required>
+      <div class="price"><span>${symbol}</span><input class="i-price" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0.00" required></div>
+      <button type="button" class="icon-btn" aria-label="Remove item">${ICONS.x}</button>`;
+    row.querySelector('button').addEventListener('click', () => {
+      if (itemsEl.children.length > 1) row.remove();
+      update();
+    });
+    row.querySelector('.i-price').addEventListener('input', update);
+    itemsEl.appendChild(row);
+    row.querySelector('.i-name').focus();
+  };
+  const update = () => {
+    const total = [...itemsEl.querySelectorAll('.i-price')].reduce((sum, i) => sum + (Number(i.value) || 0), 0);
+    form.querySelector('#total').textContent = formatAmount(Math.round(total * 100), cur);
+    const pot = pots.find((p) => p.pot === form.querySelector('[name=pot]:checked').value);
+    const availInCur = cur === 'NGN' ? pot.available * ngnRate() : pot.available;
+    const over = form.querySelector('#over');
+    over.hidden = total * 100 <= availInCur;
+    over.textContent = `This is more than the ${money(pot.available)} available in your ${potLabel(pot.pot).toLowerCase()} pot. You can still send it; your admin will decide.`;
+  };
+  form.querySelector('#add-item').addEventListener('click', addRow);
+  form.querySelectorAll('[name=pot]').forEach((r) => r.addEventListener('change', update));
+  addRow();
+  update();
+
+  onSubmit(form, async (d) => {
+    const items = [...itemsEl.querySelectorAll('.item-row')].map((row) => ({
+      name: row.querySelector('.i-name').value,
+      price: row.querySelector('.i-price').value,
+    }));
+    await api('/api/me/requests', {
+      method: 'POST',
+      body: { pot: d.pot, items, currency: cur, reason: d.reason, bankName: d.bankName, accountNumber: d.accountNumber, accountName: d.accountName },
+    });
+    toast('Request sent to your admin');
+    location.hash = '#/requests';
+  });
+}
+
+function requestCard(r, { admin }) {
+  const date = formatDateTime(r.createdAt);
+  const over = admin && r.status === 'pending' && r.potAvailable !== undefined && r.amount > r.potAvailable;
+  return `
+    <article class="card req ${r.status}">
+      <div class="req-head">
+        ${
+          admin
+            ? `<div class="person"><span class="avatar blue">${esc(initials(r.member?.displayName))}</span><div><strong>${esc(r.member?.displayName ?? 'Member')}</strong><div class="sub">${r.member?.username ? '@' + esc(r.member.username) + ' · ' : ''}${esc(date)}</div></div></div>`
+            : `<div><strong>${esc(r.title)}</strong><div class="muted" style="font-size:13px">${esc(date)}</div></div>`
+        }
+        <div class="req-amt"><b>${money(r.amount)}</b><div>${potPill(r.pot)} ${statusPill(r.status)}</div></div>
+      </div>
+      ${admin && r.status === 'pending' ? `<div class="${over ? 'warn' : 'ok-note'}">${over ? 'Exceeds' : 'Within'} the ${money(r.potAvailable)} available in their ${potLabel(r.pot).toLowerCase()} pot</div>` : ''}
+      ${itemsTable(r)}
+      ${r.reason ? `<p class="req-reason">“${esc(r.reason)}”</p>` : ''}
+      <div class="bank">
+        <div><span>Bank</span><b>${esc(r.bankName)}</b></div>
+        <div><span>Account number</span><b>${esc(r.accountNumber)}</b>${admin ? `<button type="button" class="icon-btn" data-copy="${esc(r.accountNumber)}" title="Copy account number">${ICONS.copy}</button>` : ''}</div>
+        <div><span>Account name</span><b>${esc(r.accountName)}</b></div>
+      </div>
+      ${r.status !== 'pending' && (r.adminNote || r.decidedAt) ? `<div class="decision">${r.status === 'approved' ? 'Approved' : 'Declined'} ${formatDateTime(r.decidedAt)}${r.adminNote ? ` — “${esc(r.adminNote)}”` : ''}</div>` : ''}
+      ${
+        admin && r.status === 'pending'
+          ? `<div class="req-actions">
+              <input class="note" data-note="${esc(r.id)}" maxlength="300" placeholder="Note to ${esc(r.member?.displayName?.split(' ')[0] ?? 'member')} (optional)">
+              <button class="btn danger" data-decide="decline" data-id="${esc(r.id)}">Decline</button>
+              <button class="btn" data-decide="approve" data-id="${esc(r.id)}">Approve</button>
+            </div>`
+          : ''
+      }
+      ${!admin && r.status === 'pending' ? `<div class="req-actions"><button class="btn ghost small" data-cancel="${esc(r.id)}">Cancel request</button></div>` : ''}
+    </article>`;
+}
+
+async function renderMyRequests() {
+  const list = await api('/api/me/requests');
+  app.innerHTML = `
+    <div class="page-head">
+      <div><div class="eyebrow">Fund requests</div><h1>My requests</h1></div>
+      <a class="btn" href="#/requests/new">${ICONS.send} Request funds</a>
+    </div>
+    ${list.length ? `<div class="req-list">${list.map((r) => requestCard(r, { admin: false })).join('')}</div>` : `<div class="card empty">${ICONS.inbox}You haven't requested any funds yet.</div>`}`;
+  app.querySelectorAll('[data-cancel]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      if (!confirm('Cancel this request?')) return;
+      await api(`/api/me/requests/${b.dataset.cancel}`, { method: 'DELETE' });
+      toast('Request cancelled');
+      renderMyRequests();
+    }),
+  );
+}
+
+async function renderReviewRequests(filter = state.requestFilter || 'pending') {
+  state.requestFilter = filter;
+  const all = await api('/api/admin/requests');
+  const list = filter === 'pending' ? all.filter((r) => r.status === 'pending') : all;
+  const pendingCount = all.filter((r) => r.status === 'pending').length;
+  if (state.info.pendingRequests !== pendingCount) {
+    state.info.pendingRequests = pendingCount;
+    renderShell();
+  }
+  app.innerHTML = `
+    <div class="page-head">
+      <div><div class="eyebrow">Admin</div><h1>Fund requests</h1></div>
+      <div class="seg">
+        <button type="button" data-filter="pending" class="${filter === 'pending' ? 'on' : ''}">Pending (${pendingCount})</button>
+        <button type="button" data-filter="all" class="${filter === 'all' ? 'on' : ''}">All</button>
+      </div>
+    </div>
+    ${list.length ? `<div class="req-list">${list.map((r) => requestCard(r, { admin: true })).join('')}</div>` : `<div class="card empty">${ICONS.inbox}${filter === 'pending' ? 'No requests waiting for you.' : 'No fund requests yet.'}</div>`}`;
+
+  app.querySelectorAll('[data-filter]').forEach((b) => b.addEventListener('click', () => renderReviewRequests(b.dataset.filter)));
+  app.querySelectorAll('[data-copy]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      await navigator.clipboard?.writeText(b.dataset.copy).catch(() => {});
+      toast('Account number copied');
+    }),
+  );
+  app.querySelectorAll('[data-decide]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const r = list.find((x) => x.id === b.dataset.id);
+      const approve = b.dataset.decide === 'approve';
+      const question = approve
+        ? `Approve ${money(r.amount)} for ${r.member?.displayName}? It will be taken from their ${potLabel(r.pot).toLowerCase()} pot. Remember to send the money to ${r.bankName} ${r.accountNumber}.`
+        : `Decline this request from ${r.member?.displayName}?`;
+      if (!confirm(question)) return;
+      const note = app.querySelector(`[data-note="${CSS.escape(r.id)}"]`)?.value ?? '';
+      b.disabled = true;
+      try {
+        await api(`/api/admin/requests/${r.id}/decision`, { method: 'POST', body: { decision: b.dataset.decide, note } });
+        toast(approve ? 'Request approved' : 'Request declined');
+      } catch (err) {
+        toast(err.message);
+      }
+      renderReviewRequests();
+    }),
+  );
 }
 
 // --- account --------------------------------------------------------------

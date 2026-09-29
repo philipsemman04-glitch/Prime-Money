@@ -7,6 +7,7 @@ class MemoryStore {
     this.settings = new Map();
     this.users = new Map();
     this.transactions = new Map();
+    this.requests = new Map();
   }
 
   async getSetting(key) {
@@ -80,6 +81,40 @@ class MemoryStore {
 
   async deleteTransaction(id) {
     this.transactions.delete(id);
+  }
+
+  async listRequests({ userId, status } = {}) {
+    return [...this.requests.values()]
+      .filter((r) => (!userId || r.userId === userId) && (!status || r.status === status))
+      .map((r) => structuredClone(r));
+  }
+
+  async getRequest(id) {
+    const r = this.requests.get(id);
+    return r ? structuredClone(r) : null;
+  }
+
+  async createRequest(r) {
+    const req = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      adminNote: '',
+      decidedAt: null,
+      transactionId: null,
+      ...structuredClone(r),
+    };
+    this.requests.set(req.id, req);
+    return structuredClone(req);
+  }
+
+  async updateRequest(id, patch) {
+    const r = this.requests.get(id);
+    if (r) Object.assign(r, structuredClone(patch));
+  }
+
+  async deleteRequest(id) {
+    this.requests.delete(id);
   }
 }
 

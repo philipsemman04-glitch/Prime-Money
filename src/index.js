@@ -9,13 +9,14 @@ const { MemoryStore } = require('./store/memory');
 const env = process.env;
 const onVercel = Boolean(env.VERCEL);
 
-// Data source IDs of the Members / Transactions / Settings tables in the
+// Data source IDs of the Members / Transactions / Settings / Fund Requests tables in the
 // "Prime Money — App Database" Notion page. Override with env vars if the
 // tables are ever recreated.
 const NOTION_IDS = {
   membersId: env.NOTION_MEMBERS_DS || '256dba6f-a471-82ef-886b-07568bc5a93d',
   transactionsId: env.NOTION_TRANSACTIONS_DS || 'b2bdba6f-a471-83ee-b165-87e04eb0e250',
   settingsId: env.NOTION_SETTINGS_DS || 'a1ddba6f-a471-8230-a00b-075b1f4f1329',
+  requestsId: env.NOTION_REQUESTS_DS || '084b9903-be69-4b80-88c8-1743432432d3',
 };
 
 let store;

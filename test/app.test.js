@@ -5,7 +5,7 @@ const { MemoryStore } = require('../src/store/memory');
 const { NotionStore } = require('../src/store/notion');
 const { createFakeNotionClient } = require('./fake-notion');
 
-const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings' };
+const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings', requestsId: 'ds-requests' };
 const STORES = {
   memory: () => new MemoryStore(),
   notion: () => new NotionStore({ ...IDS, client: createFakeNotionClient(IDS) }),
@@ -183,4 +183,80 @@ scenario('login is throttled after repeated failures', async (t, makeStore) => {
     assert.equal((await c('/api/login', { method: 'POST', body: { username: 'boss', password: 'nope' } })).status, 401);
   }
   assert.equal((await c('/api/login', { method: 'POST', body: { username: 'boss', password: 'supersecret' } })).status, 429);
+});
+
+scenario('income is split into pots; fund requests are approved or declined by the admin', async (t, makeStore) => {
+  const { base, close } = await startServer(makeStore);
+  t.after(close);
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+  const { body: inv } = await admin('/api/admin/members', { method: 'POST', body: { displayName: 'Ada' } });
+  const ada = client(base);
+  await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123' } });
+
+  // $1,000 income -> 30/30/20/20 split; a $50 expense comes out of personal by default.
+  await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 1000, category: 'Salary', date: '2026-04-01' } });
+  await ada('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 50, category: 'Food', date: '2026-04-02' } });
+  await ada('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 20, category: 'Transport', date: '2026-04-02', pot: 'business' } });
+  let pots = (await ada('/api/me/dashboard?month=2026-04')).body.pots;
+  const avail = (list) => Object.fromEntries(list.map((p) => [p.pot, p.available]));
+  assert.deepEqual(avail(pots), { business: 28000, personal: 25000, savings: 20000, investment: 20000 });
+
+  // Invalid requests are rejected.
+  const bank = { bankName: 'GTBank', accountNumber: '0123456789', accountName: 'Ada Obi' };
+  let r = await ada('/api/me/requests', { method: 'POST', body: { pot: 'business', items: [], ...bank } });
+  assert.equal(r.status, 400);
+  r = await ada('/api/me/requests', { method: 'POST', body: { pot: 'business', items: [{ name: 'Laptop', price: 100 }], ...bank, accountNumber: '12' } });
+  assert.equal(r.status, 400);
+
+  // A valid request with an itemised breakdown.
+  r = await ada('/api/me/requests', {
+    method: 'POST',
+    body: { pot: 'business', items: [{ name: 'Laptop', price: '150' }, { name: 'Mouse', price: 25.5 }], reason: 'Work kit', ...bank },
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.amount, 17550);
+  assert.equal(r.body.title, 'Laptop + 1 more');
+  const laptopId = r.body.id;
+
+  // Admin is notified (pending count) and sees details plus the pot balance.
+  assert.equal((await admin('/api/state')).body.pendingRequests, 1);
+  assert.equal((await ada('/api/state')).body.pendingRequests, undefined);
+  let list = (await admin('/api/admin/requests')).body;
+  assert.equal(list.length, 1);
+  assert.equal(list[0].member.username, 'ada');
+  assert.equal(list[0].accountNumber, '0123456789');
+  assert.equal(list[0].potAvailable, 28000);
+  assert.equal(list[0].items.length, 2);
+
+  // Members cannot decide requests.
+  assert.equal((await ada(`/api/admin/requests/${laptopId}/decision`, { method: 'POST', body: { decision: 'approve' } })).status, 403);
+
+  // Approve: money leaves the business pot and shows as an expense.
+  r = await admin(`/api/admin/requests/${laptopId}/decision`, { method: 'POST', body: { decision: 'approve', note: 'Sent today' } });
+  assert.equal(r.status, 200);
+  assert.equal((await admin(`/api/admin/requests/${laptopId}/decision`, { method: 'POST', body: { decision: 'decline' } })).status, 409);
+  pots = (await ada('/api/me/dashboard?month=2026-04')).body.pots;
+  assert.equal(avail(pots).business, 28000 - 17550);
+  const mine = (await ada('/api/me/requests')).body;
+  assert.deepEqual([mine[0].status, mine[0].adminNote], ['approved', 'Sent today']);
+  const month = new Date().toISOString().slice(0, 7);
+  const txs = (await ada(`/api/me/dashboard?month=${month}`)).body.transactions;
+  const payout = txs.find((x) => x.category === 'Fund request');
+  assert.deepEqual([payout.amount, payout.pot], [17550, 'business']);
+  // The payout entry cannot be deleted by the member.
+  assert.equal((await ada(`/api/me/transactions/${payout.id}`, { method: 'DELETE' })).status, 400);
+
+  // Decline another; cancel a third while pending.
+  r = await ada('/api/me/requests', { method: 'POST', body: { pot: 'savings', items: [{ name: 'Phone', price: 300 }], ...bank } });
+  await admin(`/api/admin/requests/${r.body.id}/decision`, { method: 'POST', body: { decision: 'decline', note: 'Not now' } });
+  assert.equal(avail((await ada('/api/me/dashboard?month=2026-04')).body.pots).savings, 20000);
+  r = await ada('/api/me/requests', { method: 'POST', body: { pot: 'personal', items: [{ name: 'Shoes', price: 40 }], ...bank } });
+  assert.equal((await ada(`/api/me/requests/${r.body.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin('/api/state')).body.pendingRequests, 0);
+
+  // Admin can change the split; it must add up to 100.
+  assert.equal((await admin('/api/admin/allocation', { method: 'PUT', body: { business: 50, personal: 30, savings: 20, investment: 20 } })).status, 400);
+  assert.equal((await admin('/api/admin/allocation', { method: 'PUT', body: { business: 40, personal: 30, savings: 20, investment: 10 } })).status, 200);
+  assert.equal((await ada('/api/state')).body.allocation.business, 40);
 });

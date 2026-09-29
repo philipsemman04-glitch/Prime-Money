@@ -11,7 +11,13 @@ const SCHEMAS = {
   },
   transactions: {
     Entry: 'title', Member: 'relation', Type: 'select', 'Amount (USD)': 'number', 'Original amount': 'number',
-    'Original currency': 'select', Category: 'select', Note: 'rich_text', Date: 'date',
+    'Original currency': 'select', Category: 'select', Note: 'rich_text', Date: 'date', Pot: 'select',
+  },
+  requests: {
+    Request: 'title', Member: 'relation', Pot: 'select', 'Amount (USD)': 'number', 'Original amount': 'number',
+    'Original currency': 'select', Breakdown: 'rich_text', 'Items data': 'rich_text', Reason: 'rich_text',
+    Bank: 'rich_text', 'Account number': 'rich_text', 'Account name': 'rich_text', Status: 'select',
+    'Admin note': 'rich_text', Decided: 'date', 'Transaction ID': 'rich_text',
   },
   settings: { Key: 'title', Value: 'rich_text' },
 };
@@ -22,7 +28,7 @@ function notFound() {
 
 class FakeNotion {
   constructor(ids, { pageSize = 2 } = {}) {
-    this.schemaFor = { [ids.membersId]: SCHEMAS.members, [ids.transactionsId]: SCHEMAS.transactions, [ids.settingsId]: SCHEMAS.settings };
+    this.schemaFor = { [ids.membersId]: SCHEMAS.members, [ids.transactionsId]: SCHEMAS.transactions, [ids.settingsId]: SCHEMAS.settings, [ids.requestsId]: SCHEMAS.requests };
     this.pageSize = pageSize; // small, to exercise pagination
     this.pages = new Map();
     this.calls = 0;
@@ -88,6 +94,7 @@ class FakeNotion {
       const value = (prop?.rich_text ?? []).map((t) => t.plain_text).join('');
       return value === filter.rich_text.equals;
     }
+    if (filter.select) return prop?.select?.name === filter.select.equals;
     if (filter.relation) return (prop?.relation ?? []).some((r) => r.id === filter.relation.contains);
     if (filter.date) {
       const d = prop?.date?.start;

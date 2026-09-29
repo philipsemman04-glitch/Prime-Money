@@ -288,6 +288,100 @@ tr.clickable:hover td { background: rgba(255, 255, 255, 0.02); }
   max-width: calc(100% - 32px);
 }
 
+/* ---------- notification badge ---------- */
+.nav-ico { position: relative; display: inline-grid; }
+.badge {
+  position: absolute; top: -7px; right: -10px; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 99px; background: var(--expense); color: #fff; font: 700 11px/18px "Inter", sans-serif; text-align: center;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.banner {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding: 14px 18px; border-radius: 14px;
+  background: var(--gold-soft); border: 1px solid rgba(227, 180, 72, 0.45); color: var(--text);
+}
+.banner svg { color: var(--gold); flex: none; }
+.banner .go { margin-left: auto; color: var(--gold); font-weight: 600; }
+.banner:hover { color: var(--text); border-color: var(--gold); }
+
+/* ---------- pots ---------- */
+.pots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+@media (max-width: 960px) { .pots { grid-template-columns: repeat(2, 1fr); } }
+.pot {
+  position: relative; padding: 16px; border-radius: 14px; background: var(--bg-2);
+  border: 1px solid var(--border); border-top: 3px solid var(--pot);
+}
+.pot-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.pot-ico { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: var(--pot); background: color-mix(in srgb, var(--pot) 14%, transparent); flex: none; }
+.pot-pct { font-weight: 700; font-size: 13px; color: var(--pot); }
+.pot-name { font-size: 13px; color: var(--muted); }
+.pot-amt { font-family: var(--display); font-weight: 800; font-size: 22px; margin: 2px 0 10px; font-variant-numeric: tabular-nums; }
+.pot-track { height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.pot-track div { height: 100%; background: var(--pot); border-radius: 99px; }
+.pot-sub { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.pot-link { display: inline-block; margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--pot); }
+.pot-link:hover { color: var(--text); }
+.pot-pill { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+.pill.pending { color: var(--gold); background: var(--gold-soft); }
+.pill.approved { color: var(--income); background: var(--income-soft); }
+.pill.declined { color: var(--expense); background: var(--expense-soft); }
+
+/* ---------- request form ---------- */
+.pot-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pot-radio {
+  display: flex; align-items: center; gap: 12px; margin: 0; padding: 12px; cursor: pointer;
+  border-radius: 12px; border: 1px solid var(--border); background: var(--bg-2); color: var(--text);
+}
+.pot-radio input { display: none; }
+.pot-radio b { display: block; font-size: 14px; }
+.pot-radio small { color: var(--muted); font-size: 12px; }
+.pot-radio:has(input:checked) { border-color: var(--pot); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pot) 20%, transparent); }
+.item-row { display: grid; grid-template-columns: 1fr 150px 34px; gap: 8px; align-items: center; margin-bottom: 10px; }
+.item-row input { margin: 0; }
+.price { position: relative; margin-top: 6px; }
+.item-row .price { margin: 0; }
+.price span { position: absolute; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 14px; pointer-events: none; }
+.price span:first-child { left: 12px; }
+.price input { padding-left: 28px; margin: 0; }
+.alloc-row .price span { right: 12px; }
+.alloc-row .price input { padding-left: 13px; padding-right: 30px; }
+.req-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border-strong); }
+.req-total b { font-family: var(--display); font-size: 24px; }
+.warn { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; color: var(--gold-light); background: var(--gold-soft); border: 1px solid rgba(227, 180, 72, 0.35); }
+.ok-note { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; color: var(--income); background: var(--income-soft); }
+@media (max-width: 520px) {
+  .pot-choice { grid-template-columns: 1fr; }
+  .item-row { grid-template-columns: 1fr 110px 34px; }
+}
+
+/* ---------- request cards ---------- */
+.req-list { display: grid; gap: 16px; }
+.req.pending { border-left: 3px solid var(--gold); }
+.req.approved { border-left: 3px solid var(--income); }
+.req.declined { border-left: 3px solid var(--expense); }
+.req-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.req-amt { text-align: right; }
+.req-amt b { display: block; font-family: var(--display); font-size: 22px; margin-bottom: 4px; }
+.req-amt div { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+table.items { margin-top: 14px; }
+table.items td { padding: 9px 4px; }
+table.items tr.total td { font-weight: 700; border-top: 1px solid var(--border-strong); }
+.req-reason { margin: 12px 0 0; color: var(--muted); font-style: italic; }
+.bank { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; padding: 14px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--border); }
+.bank > div { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.bank span { width: 100%; font-size: 12px; color: var(--muted); }
+.bank b { font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.bank .icon-btn { width: 28px; height: 28px; }
+@media (max-width: 640px) { .bank { grid-template-columns: 1fr; } }
+.decision { margin-top: 12px; font-size: 13px; color: var(--muted); }
+.req-actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+.req-actions .note { flex: 1; min-width: 200px; margin: 0; }
+
+/* ---------- income split ---------- */
+.alloc-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.alloc-row label { display: flex; flex-direction: column; }
+.alloc-row .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--pot); margin-right: 6px; }
+@media (max-width: 700px) { .alloc-row { grid-template-columns: 1fr 1fr; } }
+
 /* ---------- phones: bottom tab bar ---------- */
 @media (max-width: 700px) {
   /* No backdrop-filter here: it would make the fixed tab bar below position
@@ -300,7 +394,7 @@ tr.clickable:hover td { background: rgba(255, 255, 255, 0.02); }
     justify-content: space-around; padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
     background: rgba(10, 14, 22, 0.95); backdrop-filter: blur(14px); border-top: 1px solid var(--border);
   }
-  .nav a { flex-direction: column; gap: 3px; padding: 6px 14px; font-size: 11px; border-radius: 12px; }
+  .nav a { flex-direction: column; gap: 3px; padding: 6px 8px; font-size: 11px; border-radius: 12px; }
   .nav a.active { background: transparent; box-shadow: none; color: var(--gold); }
   .container { padding: 20px 16px 110px; }
   .page-head h1 { font-size: 24px; }
