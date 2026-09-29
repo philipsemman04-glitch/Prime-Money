@@ -1,15 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { openDatabase } = require('../src/db');
-const { createApp } = require('../src/app');
+const { createDb } = require('../src/db');
+const { createApp } = require('../src/routes');
 
-async function startServer() {
-  const app = createApp(openDatabase(':memory:'));
+async function startServer({ fetchLiveRate = async () => 1500 } = {}) {
+  const db = createDb(); // in-memory Postgres
+  const app = createApp(db, { fetchLiveRate });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { base, close: () => server.close() };
+  return { base, close: () => { server.close(); return db.close(); } };
 }
 
 // Minimal cookie-keeping client, one per simulated browser.
@@ -123,4 +124,49 @@ test('members cannot touch each other\'s data; reset and deactivate work', async
   await admin(`/api/admin/members/${adaId}`, { method: 'PATCH', body: { active: false } });
   assert.equal((await ada2('/api/me/summary')).status, 401);
   assert.equal((await client(base)('/api/login', { method: 'POST', body: { username: 'ada.o', password: 'newpassword' } })).status, 403);
+});
+
+test('amounts are stored in USD; naira entries convert at the current rate', async (t) => {
+  let liveRate = 1500;
+  const { base, close } = await startServer({ fetchLiveRate: async () => liveRate });
+  t.after(close);
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+
+  let state = (await admin('/api/state')).body;
+  assert.equal(state.baseCurrency, 'USD');
+  assert.equal(state.rates.NGN.rate, 1500);
+  assert.equal(state.rates.NGN.source, 'live');
+
+  await admin('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 100, currency: 'USD', category: 'Salary', date: '2026-03-01' } });
+  await admin('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 30000, currency: 'NGN', category: 'Food', date: '2026-03-02' } });
+  const txs = (await admin('/api/me/transactions?month=2026-03')).body;
+  const food = txs.find((x) => x.category === 'Food');
+  assert.deepEqual([food.amount, food.originalCurrency, food.originalAmount], [2000, 'NGN', 3000000]);
+  assert.equal((await admin('/api/me/summary?month=2026-03')).body.balance, 8000);
+
+  // Admin can pin a rate, and clear it to go back to live.
+  let r = await admin('/api/admin/rate', { method: 'PUT', body: { rate: 1600 } });
+  assert.deepEqual([r.body.rate, r.body.source], [1600, 'manual']);
+  r = await admin('/api/admin/rate', { method: 'PUT', body: { rate: null } });
+  assert.deepEqual([r.body.rate, r.body.source], [1500, 'live']);
+
+  // Members cannot change the rate.
+  const { body: inv } = await admin('/api/admin/members', { method: 'POST', body: { displayName: 'Ada' } });
+  const ada = client(base);
+  await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123' } });
+  assert.equal((await ada('/api/admin/rate', { method: 'PUT', body: { rate: 1 } })).status, 403);
+  assert.equal((await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 5, currency: 'EUR', category: 'Gift', date: '2026-03-01' } })).status, 400);
+});
+
+test('login is throttled after repeated failures', async (t) => {
+  const { base, close } = await startServer();
+  t.after(close);
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+  const c = client(base);
+  for (let i = 0; i < 8; i++) {
+    assert.equal((await c('/api/login', { method: 'POST', body: { username: 'boss', password: 'nope' } })).status, 401);
+  }
+  assert.equal((await c('/api/login', { method: 'POST', body: { username: 'boss', password: 'supersecret' } })).status, 429);
 });

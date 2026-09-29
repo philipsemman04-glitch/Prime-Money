@@ -163,3 +163,8 @@ tr.clickable:hover td { background: var(--bg); }
   .stat .value { font-size: 18px; }
   .topbar { gap: 8px 16px; }
 }
+
+.cur-switch { margin-bottom: 0; }
+.cur-switch button.on { background: var(--bg); color: var(--text); font-weight: 600; }
+.cur-switch button:disabled { opacity: 0.5; cursor: not-allowed; }
+td .orig { font-size: 12px; }

@@ -1,6 +1,9 @@
 'use strict';
 
-const state = { info: null, month: new Date().toISOString().slice(0, 7) };
+const state = { info: null, month: new Date().toISOString().slice(0, 7), currency: 'USD' };
+try {
+  state.currency = localStorage.getItem('pm_currency') === 'NGN' ? 'NGN' : 'USD';
+} catch {}
 const app = document.getElementById('app');
 
 // --- helpers --------------------------------------------------------------
@@ -24,10 +27,26 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-function money(cents, { sign = false } = {}) {
+const ngnRate = () => state.info?.rates?.NGN?.rate || null;
+
+// Displayed currency: NGN only when a rate is known, otherwise USD.
+const displayCurrency = () => (state.currency === 'NGN' && ngnRate() ? 'NGN' : 'USD');
+
+function formatAmount(cents, currency, { sign = false } = {}) {
   const value = (cents ?? 0) / 100;
-  const text = new Intl.NumberFormat(undefined, { style: 'currency', currency: state.info?.currency || 'USD' }).format(value);
+  const text = new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    currencyDisplay: 'narrowSymbol',
+    maximumFractionDigits: currency === 'NGN' ? 0 : 2,
+  }).format(value);
   return sign && value > 0 ? `+${text}` : text;
+}
+
+// All amounts from the server are USD cents; convert for display.
+function money(usdCents, opts) {
+  const cur = displayCurrency();
+  return formatAmount(cur === 'NGN' ? (usdCents ?? 0) * ngnRate() : usdCents, cur, opts);
 }
 
 const tone = (cents) => (cents > 0 ? 'pos' : cents < 0 ? 'neg' : '');
@@ -43,9 +62,9 @@ function shiftMonth(month, delta) {
   return d.toISOString().slice(0, 7);
 }
 
-function formatDateTime(sqlDate) {
-  if (!sqlDate) return '—';
-  return new Date(sqlDate.replace(' ', 'T') + 'Z').toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+function formatDateTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function toast(message) {
@@ -109,6 +128,13 @@ function renderShell() {
   document.title = state.info?.teamName || 'Prime Money';
   if (!user) return;
   document.getElementById('who-name').textContent = user.displayName;
+  const cur = displayCurrency();
+  const noRate = !ngnRate();
+  document.getElementById('currency').innerHTML = ['USD', 'NGN']
+    .map(
+      (c) => `<button type="button" data-cur="${c}" class="${c === cur ? 'on' : ''}" ${c === 'NGN' && noRate ? 'disabled title="No exchange rate available yet"' : ''}>${c === 'USD' ? '$ USD' : '₦ NGN'}</button>`,
+    )
+    .join('');
   const route = location.hash || '#/';
   const links = [['#/', 'My money']];
   if (user.role === 'admin') links.push(['#/team', 'Team']);
@@ -120,6 +146,16 @@ function renderShell() {
     })
     .join('');
 }
+
+document.getElementById('currency').addEventListener('click', (e) => {
+  const c = e.target.closest('[data-cur]')?.dataset.cur;
+  if (!c || c === state.currency) return;
+  state.currency = c;
+  try {
+    localStorage.setItem('pm_currency', c);
+  } catch {}
+  route();
+});
 
 document.getElementById('logout').addEventListener('click', async () => {
   await api('/api/logout', { method: 'POST' }).catch(() => {});
@@ -160,13 +196,6 @@ function renderSetup() {
       <p class="sub">Set up your team and create the admin account. You will be able to see everyone's dashboard.</p>
       <form id="f">
         <label>Team name <input name="teamName" placeholder="e.g. Prime Team" maxlength="60"></label>
-        <label>Currency
-          <select name="currency">
-            ${['USD', 'EUR', 'GBP', 'NGN', 'GHS', 'KES', 'ZAR', 'CAD', 'INR']
-              .map((c) => `<option>${c}</option>`)
-              .join('')}
-          </select>
-        </label>
         <label>Your name <input name="displayName" required maxlength="60"></label>
         <label>Username <input name="username" required autocomplete="username"></label>
         <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
@@ -305,7 +334,11 @@ function transactionsHtml(list, { editable }) {
             <td>${esc(new Date(t.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))}</td>
             <td>${esc(t.category)}</td>
             <td class="muted">${esc(t.note)}</td>
-            <td class="num ${t.type === 'income' ? 'pos' : 'neg'}">${t.type === 'income' ? '+' : '−'}${money(t.amount)}</td>
+            <td class="num ${t.type === 'income' ? 'pos' : 'neg'}">${t.type === 'income' ? '+' : '−'}${money(t.amount)}${
+              t.originalCurrency !== displayCurrency()
+                ? `<div class="muted orig">entered as ${formatAmount(t.originalAmount, t.originalCurrency)}</div>`
+                : ''
+            }</td>
             ${editable ? `<td class="num"><button class="btn danger small" data-del="${t.id}">Delete</button></td>` : ''}
           </tr>`,
           )
@@ -327,8 +360,9 @@ function addFormHtml() {
           <button type="button" data-type="income">Income</button>
         </div>
         <input type="hidden" name="type" value="expense">
+        <input type="hidden" name="currency" value="${displayCurrency()}">
         <div class="form-row">
-          <label>Amount <input name="amount" type="number" step="0.01" min="0.01" required inputmode="decimal"></label>
+          <label>Amount (${displayCurrency() === 'NGN' ? '₦' : '$'}) <input name="amount" type="number" step="0.01" min="0.01" required inputmode="decimal"></label>
           <label>Category <select name="category"></select></label>
           <label>Date <input name="date" type="date" value="${date}" required></label>
           <label>Note (optional) <input name="note" maxlength="200"></label>

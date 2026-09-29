@@ -60,38 +60,6 @@ function sessionCookie(token, { secure, maxAgeMs }) {
   return attrs.join('; ');
 }
 
-// Simple in-memory brute-force guard for the login endpoint.
-class LoginLimiter {
-  constructor({ maxAttempts = 8, windowMs = 15 * 60 * 1000 } = {}) {
-    this.maxAttempts = maxAttempts;
-    this.windowMs = windowMs;
-    this.attempts = new Map();
-  }
-
-  isBlocked(key) {
-    const entry = this.attempts.get(key);
-    if (!entry) return false;
-    if (Date.now() - entry.first > this.windowMs) {
-      this.attempts.delete(key);
-      return false;
-    }
-    return entry.count >= this.maxAttempts;
-  }
-
-  fail(key) {
-    const entry = this.attempts.get(key);
-    if (!entry || Date.now() - entry.first > this.windowMs) {
-      this.attempts.set(key, { count: 1, first: Date.now() });
-    } else {
-      entry.count += 1;
-    }
-  }
-
-  reset(key) {
-    this.attempts.delete(key);
-  }
-}
-
 module.exports = {
   SESSION_TTL_MS,
   COOKIE_NAME,
@@ -102,5 +70,4 @@ module.exports = {
   validatePassword,
   parseCookies,
   sessionCookie,
-  LoginLimiter,
 };
