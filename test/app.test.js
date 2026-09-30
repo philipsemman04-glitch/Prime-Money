@@ -30,7 +30,7 @@ async function startServer(makeStore, { fetchLiveRate = async () => 1500, notifi
 // Minimal cookie-keeping client, one per simulated browser.
 function client(base) {
   let cookie = '';
-  return async (path, { method = 'GET', body, csrf = true } = {}) => {
+  const call = async (path, { method = 'GET', body, csrf = true } = {}) => {
     const headers = { 'Content-Type': 'application/json', Cookie: cookie };
     if (csrf) headers['X-Requested-With'] = 'prime-money';
     const res = await fetch(base + path, { method, headers, body: body && JSON.stringify(body) });
@@ -38,6 +38,14 @@ function client(base) {
     if (set) cookie = set.split(';')[0];
     return { status: res.status, body: await res.json().catch(() => null) };
   };
+  call.cookie = async () => cookie;
+  return call;
+}
+
+// Raw request with the same cookie jar trick, for file uploads/downloads.
+async function rawFetch(base, cookieClient, path, init = {}) {
+  const cookie = await cookieClient.cookie();
+  return fetch(base + path, { redirect: 'manual', ...init, headers: { Cookie: cookie, 'X-Requested-With': 'prime-money', ...(init.headers || {}) } });
 }
 
 scenario('admin setup, member invite, personal data and central view', async (t, makeStore) => {
@@ -322,4 +330,50 @@ scenario('the admin can request funds too', async (t, makeStore) => {
   assert.equal(r.status, 201);
   const list = (await admin('/api/admin/requests')).body;
   assert.equal(list[0].member.username, 'boss');
+});
+
+scenario('the admin attaches a payment receipt that the member can view', async (t, makeStore) => {
+  const { base, close } = await startServer(makeStore);
+  t.after(close);
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+  const join = async (name) => {
+    const { body } = await admin('/api/admin/members', { method: 'POST', body: { displayName: name } });
+    const c = client(base);
+    await c(`/api/invite/${body.inviteToken}`, { method: 'POST', body: { username: name.toLowerCase(), password: 'password123' } });
+    return c;
+  };
+  const ada = await join('Ada');
+  const ben = await join('Ben');
+  const { body: req } = await ada('/api/me/requests', {
+    method: 'POST',
+    body: { pot: 'business', items: [{ name: 'Laptop', price: 100 }], bankName: 'GTBank', accountNumber: '0123456789', accountName: 'Ada' },
+  });
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const upload = (who, type = 'image/png', body = png) =>
+    rawFetch(base, who, `/api/admin/requests/${req.id}/receipt`, { method: 'POST', body, headers: { 'Content-Type': type, 'X-Filename': encodeURIComponent('GTB transfer.png') } });
+
+  // Not before approval, not by members, not other file types.
+  assert.equal((await upload(admin)).status, 400);
+  await admin(`/api/admin/requests/${req.id}/decision`, { method: 'POST', body: { decision: 'approve' } });
+  assert.equal((await upload(ada)).status, 403);
+  assert.equal((await upload(admin, 'text/html', Buffer.from('<script>'))).status, 400);
+
+  const res = await upload(admin);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).receipt.name, 'GTB transfer.png');
+
+  // The member sees it attached and can open it; other members cannot.
+  const mine = (await ada('/api/me/requests')).body;
+  assert.equal(mine[0].receipt.name, 'GTB transfer.png');
+  const view = await rawFetch(base, ada, `/api/requests/${req.id}/receipt`);
+  if (view.status === 302) {
+    assert.match(view.headers.get('location'), /^https:\/\/files\.example\//);
+  } else {
+    assert.equal(view.status, 200);
+    assert.equal(view.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await view.arrayBuffer()), png);
+  }
+  assert.equal((await rawFetch(base, ben, `/api/requests/${req.id}/receipt`)).status, 404);
+  assert.ok([200, 302].includes((await rawFetch(base, admin, `/api/requests/${req.id}/receipt`)).status));
 });

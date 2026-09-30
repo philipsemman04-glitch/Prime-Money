@@ -8,6 +8,7 @@ class MemoryStore {
     this.users = new Map();
     this.transactions = new Map();
     this.requests = new Map();
+    this.receipts = new Map();
   }
 
   async getSetting(key) {
@@ -115,6 +116,17 @@ class MemoryStore {
 
   async deleteRequest(id) {
     this.requests.delete(id);
+  }
+
+  async attachReceipt(id, { filename, contentType, data }) {
+    const r = this.requests.get(id);
+    if (!r) return;
+    this.receipts.set(id, { filename, contentType, data: Buffer.from(data) });
+    r.receipt = { name: filename };
+  }
+
+  async getReceipt(id) {
+    return this.receipts.get(id) ?? null;
   }
 }
 

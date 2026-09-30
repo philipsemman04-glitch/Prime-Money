@@ -85,8 +85,15 @@ function toRequest(page) {
     adminNote: readText(p['Admin note']) ?? '',
     decidedAt: readDate(p['Decided']),
     transactionId: readText(p['Transaction ID']),
+    receipt: readFile(p['Receipt']),
     createdAt: page.created_time,
   };
+}
+
+function readFile(prop) {
+  const f = prop?.files?.[0];
+  if (!f) return null;
+  return { name: f.name, url: f.file?.url ?? f.external?.url ?? null };
 }
 
 function requestProperties(r) {
@@ -304,6 +311,25 @@ class NotionStore {
 
   async deleteRequest(id) {
     await this.notion.pages.update({ page_id: id, in_trash: true });
+  }
+
+  // Upload a payment receipt (image or PDF) and attach it to the request.
+  async attachReceipt(id, { filename, contentType, data }) {
+    const upload = await this.notion.fileUploads.create({ mode: 'single_part', filename, content_type: contentType });
+    await this.notion.fileUploads.send({
+      file_upload_id: upload.id,
+      file: { filename, data: new Blob([data], { type: contentType }) },
+    });
+    await this.notion.pages.update({
+      page_id: id,
+      properties: { Receipt: { files: [{ type: 'file_upload', file_upload: { id: upload.id }, name: filename }] } },
+    });
+  }
+
+  // Notion file links expire after about an hour, so fetch a fresh one each time.
+  async getReceipt(id) {
+    const request = await this.getRequest(id);
+    return request?.receipt?.url ? { url: request.receipt.url, filename: request.receipt.name } : null;
   }
 }
 

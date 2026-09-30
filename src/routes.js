@@ -57,6 +57,7 @@ function publicRequest(r, member) {
     status: r.status,
     adminNote: r.adminNote,
     decidedAt: r.decidedAt,
+    receipt: r.receipt ? { name: r.receipt.name } : null,
     createdAt: r.createdAt,
     ...(member ? { member: { id: member.id, displayName: member.displayName, username: member.username } } : {}),
   };
@@ -457,6 +458,21 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     res.status(201).json(publicRequest(request));
   });
 
+  // Receipt viewing: the member who made the request, or the admin.
+  app.get('/api/requests/:id/receipt', requireUser, async (req, res) => {
+    const request = await store.getRequest(req.params.id);
+    if (!request || (request.userId !== req.user.id && req.user.role !== 'admin')) {
+      return res.status(404).json({ error: 'Receipt not found.' });
+    }
+    const receipt = await store.getReceipt(request.id);
+    if (!receipt) return res.status(404).json({ error: 'No receipt attached yet.' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (receipt.url) return res.redirect(302, receipt.url);
+    res.setHeader('Content-Type', receipt.contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${receipt.filename}"`);
+    res.send(receipt.data);
+  });
+
   // A member can withdraw a request while it is still pending.
   app.delete('/api/me/requests/:id', requireUser, async (req, res) => {
     const request = await store.getRequest(req.params.id);
@@ -580,6 +596,30 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     });
     res.json({ ok: true, status: 'approved' });
   });
+
+  // Proof of payment: the admin attaches a screenshot or PDF of the transfer.
+  const RECEIPT_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' };
+  app.post(
+    '/api/admin/requests/:id/receipt',
+    requireUser,
+    requireAdmin,
+    express.raw({ type: Object.keys(RECEIPT_TYPES), limit: '4mb' }),
+    async (req, res) => {
+      const contentType = (req.get('Content-Type') || '').split(';')[0].trim();
+      if (!RECEIPT_TYPES[contentType]) return res.status(400).json({ error: 'Upload a photo (JPG, PNG, WebP) or a PDF.' });
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'The file is empty.' });
+      const request = await store.getRequest(req.params.id);
+      if (!request) return res.status(404).json({ error: 'Request not found.' });
+      if (request.status !== 'approved') return res.status(400).json({ error: 'Approve the request before attaching a receipt.' });
+      let name = 'receipt';
+      try {
+        name = decodeURIComponent(req.get('X-Filename') || 'receipt').replace(/[^\w .()-]/g, '').slice(0, 80) || 'receipt';
+      } catch {}
+      const filename = name.replace(/\.[a-z0-9]+$/i, '') + '.' + RECEIPT_TYPES[contentType];
+      await store.attachReceipt(request.id, { filename, contentType, data: req.body });
+      res.json({ ok: true, receipt: { name: filename } });
+    },
+  );
 
   app.put('/api/admin/notify-email', requireUser, requireAdmin, async (req, res) => {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';

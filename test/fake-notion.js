@@ -17,7 +17,7 @@ const SCHEMAS = {
     Request: 'title', Member: 'relation', Pot: 'select', 'Amount (USD)': 'number', 'Original amount': 'number',
     'Original currency': 'select', Breakdown: 'rich_text', 'Items data': 'rich_text', Reason: 'rich_text',
     Bank: 'rich_text', 'Account number': 'rich_text', 'Account name': 'rich_text', Status: 'select',
-    'Admin note': 'rich_text', Decided: 'date', 'Transaction ID': 'rich_text',
+    'Admin note': 'rich_text', Decided: 'date', 'Transaction ID': 'rich_text', Receipt: 'files',
   },
   settings: { Key: 'title', Value: 'rich_text' },
 };
@@ -34,6 +34,21 @@ class FakeNotion {
     this.calls = 0;
 
     this.dataSources = { query: (args) => this.query(args) };
+    this.uploads = new Map();
+    this.fileUploads = {
+      create: async ({ mode, filename, content_type }) => {
+        if (mode !== 'single_part') throw new Error('unexpected mode');
+        const id = crypto.randomUUID();
+        this.uploads.set(id, { filename, content_type, sent: false });
+        return { id, status: 'pending' };
+      },
+      send: async ({ file_upload_id, file }) => {
+        const up = this.uploads.get(file_upload_id);
+        if (!up || !(file.data instanceof Blob) || file.data.size === 0) throw new Error('bad upload');
+        up.sent = true;
+        return { id: file_upload_id, status: 'uploaded' };
+      },
+    };
     this.pagesApi = {
       create: (args) => this.create(args),
       retrieve: (args) => this.retrieve(args),
@@ -49,6 +64,13 @@ class FakeNotion {
       if (!(type in value)) throw new Error(`Property "${name}" must be written as ${type}`);
       let v = value[type];
       if (type === 'title' || type === 'rich_text') v = v.map((t) => ({ plain_text: t.text.content }));
+      if (type === 'files') {
+        v = v.map((f) => {
+          const up = this.uploads.get(f.file_upload?.id);
+          if (!up?.sent) throw new Error('File upload was not sent before attaching');
+          return { name: f.name, type: 'file', file: { url: `https://files.example/${f.file_upload.id}/${up.filename}` } };
+        });
+      }
       out[name] = { type, [type]: v };
     }
     return out;
@@ -123,7 +145,7 @@ class FakeNotion {
 // Build a client object shaped like @notionhq/client's Client.
 function createFakeNotionClient(ids, opts) {
   const fake = new FakeNotion(ids, opts);
-  return { dataSources: fake.dataSources, pages: fake.pagesApi, fake };
+  return { dataSources: fake.dataSources, pages: fake.pagesApi, fileUploads: fake.fileUploads, fake };
 }
 
 module.exports = { createFakeNotionClient };

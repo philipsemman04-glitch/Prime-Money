@@ -6,7 +6,7 @@ A private money-management platform for a team.
 - **The admin sees everyone centrally**: team totals, a per-member table, and can open any member's dashboard (read-only).
 - **Members create their own username and password the first time** via a one-time invite link from the admin, then log in normally after that.
 - **Pots**: every income is split into Business 30%, Personal 30%, Savings 20% and Investment 20% (the admin can change the split on the Team page). Expenses come out of a pot (Personal by default).
-- **Fund requests**: a member picks a pot, lists what they need with prices, and gives the bank account to pay into. The admin sees a badge on **Requests** (and in the browser tab), and can get an email for each new request (set the address on the Team page), then approves or declines with an optional note. Approving records the payout as an expense from that pot; the admin then sends the money.
+- **Fund requests**: a member picks a pot, lists what they need with prices, and gives the bank account to pay into. The admin sees a badge on **Requests** (and in the browser tab), and can get an email for each new request (set the address on the Team page), then approves or declines with an optional note. Approving records the payout as an expense from that pot. The admin sends the money and attaches the transfer receipt (screenshot or PDF) when approving or later; the member can open it from their request.
 - **Dollars and naira**: all amounts are kept in US dollars. The **$ USD / ₦ NGN** switch shows everything in naira, and members can type entries in either currency. The rate is the live market rate, or a fixed rate the admin sets on the Team page.
 
 ## Where the data lives
@@ -18,7 +18,7 @@ All data is stored in Notion, under the private page **Prime Money — App Datab
 | **Members**      | One row per person: name, username, role, status, scrambled password, etc.   |
 | **Transactions** | Every entry: member, type, amount in USD, original amount/currency, category |
 | **Settings**     | Team name and the exchange rate                                              |
-| **Fund Requests**| Each request: member, pot, items, total, bank details, status, admin note    |
+| **Fund Requests**| Each request: member, pot, items, total, bank details, status, note, receipt |
 
 Keep that page private. Don't edit the *Password hash*, *Invite token* or *Session version* columns by hand.
 
