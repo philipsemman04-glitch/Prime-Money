@@ -19,7 +19,11 @@ const monthName = (month) =>
   new Date(`${month}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 
 // Scouting summary for one member from their recent entries.
-function scoutingSummary(entries, today) {
+// Daily scouting minimums (the admin can change them).
+const DEFAULT_MINIMUM = { dms: 40, posts: 2 };
+const metMinimum = (e, min) => e.dms >= min.dms && e.posts >= min.posts;
+
+function scoutingSummary(entries, today, min = DEFAULT_MINIMUM) {
   const days = new Set(entries.map((e) => e.date));
   let streak = 0;
   let day = days.has(today) ? today : addDays(today, -1);
@@ -33,6 +37,7 @@ function scoutingSummary(entries, today) {
     engagements: list.reduce((s, e) => s + e.engagements, 0),
     podcasts: list.reduce((s, e) => s + e.podcasts.length, 0),
     days: list.length,
+    metDays: list.filter((e) => metMinimum(e, min)).length,
   });
   const weekStart = addDays(today, -6);
   return {
@@ -240,10 +245,24 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     }
   }
 
+  async function scoutingMinimum() {
+    const [dms, posts] = await Promise.all([store.getSetting('scout_min_dms'), store.getSetting('scout_min_posts')]);
+    return {
+      dms: dms === null ? DEFAULT_MINIMUM.dms : Number(dms),
+      posts: posts === null ? DEFAULT_MINIMUM.posts : Number(posts),
+    };
+  }
+
   async function scoutingFor(userId) {
     const today = dayIn();
     const entries = (await store.listScouting({ userId, from: addDays(today, -62) })).sort((a, b) => b.date.localeCompare(a.date));
-    return { today, entries: entries.map(publicScouting), ...scoutingSummary(entries, today) };
+    const min = await scoutingMinimum();
+    return {
+      today,
+      minimum: min,
+      entries: entries.map((e) => ({ ...publicScouting(e), metMinimum: metMinimum(e, min) })),
+      ...scoutingSummary(entries, today, min),
+    };
   }
 
   async function goalsFor(userId, month) {
@@ -307,6 +326,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       allocation: parseAllocation(rawAllocation),
       pots: POTS,
       announcements: req.user ? (await store.listAnnouncements()).sort(byNewest).slice(0, 10) : [],
+      scoutingMinimum: req.user ? await scoutingMinimum() : undefined,
       pendingRequests: pending ? pending.length : undefined,
       ...(req.user?.role === 'admin'
         ? {
@@ -744,7 +764,11 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
 
   app.get('/api/admin/scouting', requireUser, requireAdmin, async (req, res) => {
     const today = dayIn();
-    const [users, entries] = await Promise.all([store.listUsers(), store.listScouting({ from: addDays(today, -62) })]);
+    const [users, entries, min] = await Promise.all([
+      store.listUsers(),
+      store.listScouting({ from: addDays(today, -62) }),
+      scoutingMinimum(),
+    ]);
     const members = users
       .filter((u) => u.status === 'active' && (u.role !== 'admin' || entries.some((e) => e.userId === u.id)))
       .map((u) => {
@@ -755,12 +779,21 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
           displayName: u.displayName,
           username: u.username,
           role: u.role,
-          today: todayEntry ? publicScouting(todayEntry) : null,
-          ...scoutingSummary(mine, today),
+          today: todayEntry ? { ...publicScouting(todayEntry), metMinimum: metMinimum(todayEntry, min) } : null,
+          ...scoutingSummary(mine, today, min),
         };
       })
       .sort((a, b) => b.week.dms - a.week.dms || a.displayName.localeCompare(b.displayName));
-    res.json({ today, members });
+    res.json({ today, minimum: min, members });
+  });
+
+  app.put('/api/admin/scouting-minimum', requireUser, requireAdmin, async (req, res) => {
+    const dms = count(req.body?.dms);
+    const posts = count(req.body?.posts);
+    if (dms === null || posts === null) return res.status(400).json({ error: 'Minimums must be whole numbers.' });
+    await store.setSetting('scout_min_dms', String(dms));
+    await store.setSetting('scout_min_posts', String(posts));
+    res.json({ dms, posts });
   });
 
   app.get('/api/admin/members/:id/scouting', requireUser, requireAdmin, async (req, res) => {
@@ -817,17 +850,18 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     if (!cronSecret) return res.status(503).json({ error: 'CRON_SECRET is not set.' });
     if (req.get('authorization') !== `Bearer ${cronSecret}`) return res.status(401).json({ error: 'Unauthorised.' });
     const today = dayIn();
-    const [users, entries, teamName] = await Promise.all([
+    const [users, entries, teamName, min] = await Promise.all([
       store.listUsers(),
       store.listScouting({ from: today, to: today }),
       store.getSetting('team_name'),
+      scoutingMinimum(),
     ]);
     const logged = new Set(entries.map((e) => e.userId));
     const due = users.filter((u) => u.role === 'member' && u.status === 'active' && u.email && !logged.has(u.id));
     let sent = 0;
     for (const member of due) {
       try {
-        await notifier.send({ to: member.email, ...scoutingReminderEmail({ member, teamName: teamName || 'Team Prime', url: appUrl(req, '#/scouting') }) });
+        await notifier.send({ to: member.email, ...scoutingReminderEmail({ member, minimum: min, teamName: teamName || 'Team Prime', url: appUrl(req, '#/scouting') }) });
         sent++;
       } catch (err) {
         console.error('Scouting reminder failed:', err.message);

@@ -430,6 +430,19 @@ textarea { resize: vertical; min-height: 80px; }
 .pod p { margin: 6px 0 0; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
 @media (max-width: 640px) { .num-row { grid-template-columns: 1fr; } .stat-tiles { grid-template-columns: 1fr 1fr; } }
 
+.min-note { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 12px; background: var(--blue-soft); color: var(--navy); font-size: 13px; margin-bottom: 14px; }
+.min-note svg { width: 16px; height: 16px; color: var(--blue); flex: none; }
+.min-bar { display: block; margin-top: 10px; }
+.min-track { display: block; height: 6px; border-radius: 99px; background: #fff; overflow: hidden; }
+.min-track span { display: block; height: 100%; width: 0; border-radius: 99px; background: var(--gold); transition: width .2s; }
+.min-bar small { display: block; margin-top: 6px; font-size: 12px; font-weight: 700; color: #8a6212; }
+.min-bar.met .min-track span { background: var(--income); }
+.min-bar.met small { color: var(--income); }
+.team-goals { display: grid; gap: 14px; }
+.tg-row { display: grid; grid-template-columns: 36px 1fr; gap: 12px; align-items: center; }
+.tg-name { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
+.tg-name span { color: var(--muted); font-weight: 700; }
+
 /* ---------- goals ---------- */
 .goal-progress { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
 .goal-progress b { font-size: 18px; color: var(--navy); }

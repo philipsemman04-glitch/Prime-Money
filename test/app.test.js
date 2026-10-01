@@ -593,3 +593,36 @@ scenario('monthly goals: add (not edit/delete), tick off, carry over, admin sees
   // Goal comments don't leak into team settings.
   assert.equal((await ada('/api/state')).body.teamName, 'Team Prime');
 });
+
+scenario('daily scouting minimum (40 DMs, 2 posts by default) is tracked and adjustable', async (t, makeStore) => {
+  const sent = [];
+  const notifier = { enabled: true, canEmailAnyone: true, async send(m) { sent.push(m); return { sent: true }; } };
+  const { base, close } = await startServer(makeStore, { notifier, cronSecret: 'c' });
+  t.after(close);
+  const { admin, ada } = await teamWithMember(base);
+  const today = teamDay();
+
+  assert.deepEqual((await ada('/api/state')).body.scoutingMinimum, { dms: 40, posts: 2 });
+
+  // Reminder mentions the minimum.
+  await rawFetch(base, client(base), '/api/cron/scouting-reminder', { headers: { Authorization: 'Bearer c' } });
+  assert.match(sent[0].html, /40 scouting DMs/);
+
+  // Below minimum: saved, but flagged.
+  await ada(`/api/me/scouting/${teamDay(-1)}`, { method: 'PUT', body: { dms: 39, posts: 5 } });
+  let res = await ada(`/api/me/scouting/${today}`, { method: 'PUT', body: { dms: 45, posts: 2 } });
+  assert.deepEqual(res.body.entries.map((e) => [e.date, e.metMinimum]), [[today, true], [teamDay(-1), false]]);
+  assert.equal(res.body.week.metDays, 1);
+
+  const board = (await admin('/api/admin/scouting')).body;
+  assert.deepEqual(board.minimum, { dms: 40, posts: 2 });
+  assert.equal(board.members.find((m) => m.username === 'ada').today.metMinimum, true);
+
+  // Admin changes it; members can't.
+  assert.equal((await ada('/api/admin/scouting-minimum', { method: 'PUT', body: { dms: 1, posts: 0 } })).status, 403);
+  assert.equal((await admin('/api/admin/scouting-minimum', { method: 'PUT', body: { dms: 50, posts: 'x' } })).status, 400);
+  await admin('/api/admin/scouting-minimum', { method: 'PUT', body: { dms: 50, posts: 3 } });
+  res = await ada('/api/me/scouting');
+  assert.deepEqual(res.body.minimum, { dms: 50, posts: 3 });
+  assert.equal(res.body.entries[0].metMinimum, false);
+});

@@ -172,14 +172,18 @@ function simpleEmail({ teamName, heading, lines, button, url }) {
   return { html, text };
 }
 
-function scoutingReminderEmail({ member, teamName, url }) {
+function scoutingReminderEmail({ member, minimum, teamName, url }) {
   const first = String(member.displayName || '').split(' ')[0] || 'there';
   return {
     subject: "Reminder: log today's scouting",
     ...simpleEmail({
       teamName,
       heading: "Don't forget today's scouting 📋",
-      lines: [`Hi ${escapeHtml(first)}, you haven't logged your scouting for today yet.`, 'Add your DMs, posts, engagements and any podcasts you watched — it only takes a minute.'],
+      lines: [
+        `Hi ${escapeHtml(first)}, you haven't logged your scouting for today yet.`,
+        minimum ? `Today's minimum is <b>${minimum.dms} scouting DMs</b> and <b>${minimum.posts} posts</b>.` : '',
+        'Add your DMs, posts, engagements and any podcasts you watched — it only takes a minute.',
+      ].filter(Boolean),
       button: 'Log my scouting',
       url,
     }),
