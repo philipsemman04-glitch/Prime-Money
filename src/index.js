@@ -18,6 +18,8 @@ const NOTION_IDS = {
   transactionsId: env.NOTION_TRANSACTIONS_DS || 'b2bdba6f-a471-83ee-b165-87e04eb0e250',
   settingsId: env.NOTION_SETTINGS_DS || 'a1ddba6f-a471-8230-a00b-075b1f4f1329',
   requestsId: env.NOTION_REQUESTS_DS || '084b9903-be69-4b80-88c8-1743432432d3',
+  scoutingId: env.NOTION_SCOUTING_DS || 'e7f2cd13-28c5-48bf-83d8-6b9f4ab82500',
+  goalsId: env.NOTION_GOALS_DS || 'fc460b92-796a-4c35-9517-c0c9f8223853',
 };
 
 let store;
@@ -43,7 +45,14 @@ const notifier = createNotifier({
   gmailPassword: env.GMAIL_APP_PASSWORD,
   from: env.EMAIL_FROM,
 });
-app.use(createApp(store, { sessionSecret, secureCookies: onVercel || env.SECURE_COOKIES === 'true', notifier }));
+app.use(
+  createApp(store, {
+    sessionSecret,
+    secureCookies: onVercel || env.SECURE_COOKIES === 'true',
+    notifier,
+    cronSecret: env.CRON_SECRET,
+  }),
+);
 
 module.exports = app;
 

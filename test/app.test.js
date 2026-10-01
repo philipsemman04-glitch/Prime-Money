@@ -5,7 +5,7 @@ const { MemoryStore } = require('../src/store/memory');
 const { NotionStore } = require('../src/store/notion');
 const { createFakeNotionClient } = require('./fake-notion');
 
-const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings', requestsId: 'ds-requests' };
+const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings', requestsId: 'ds-requests', scoutingId: 'ds-scouting', goalsId: 'ds-goals' };
 const STORES = {
   memory: () => new MemoryStore(),
   notion: () => new NotionStore({ ...IDS, client: createFakeNotionClient(IDS) }),
@@ -18,8 +18,8 @@ function scenario(name, fn) {
   }
 }
 
-async function startServer(makeStore, { fetchLiveRate = async () => 1500, notifier } = {}) {
-  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate, ...(notifier ? { notifier } : {}) });
+async function startServer(makeStore, { fetchLiveRate = async () => 1500, notifier, cronSecret } = {}) {
+  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate, cronSecret, ...(notifier ? { notifier } : {}) });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -469,4 +469,127 @@ scenario('members get emails when their request is approved, paid or declined', 
   assert.equal((await ada(`/api/admin/members/${adaId}/email`, { method: 'PUT', body: { email: 'x@y.co' } })).status, 403);
   await admin(`/api/admin/members/${adaId}/email`, { method: 'PUT', body: { email: 'ada.obi@example.com' } });
   assert.equal((await admin(`/api/admin/members/${adaId}/dashboard`)).body.member.email, 'ada.obi@example.com');
+});
+
+const teamDay = (offset = 0) => {
+  const d = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Lagos' }).format(new Date());
+  return new Date(Date.parse(`${d}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
+};
+
+async function teamWithMember(base) {
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { teamName: 'Team Prime', displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+  const { body: inv } = await admin('/api/admin/members', { method: 'POST', body: { displayName: 'Ada Obi' } });
+  const ada = client(base);
+  await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123', email: 'ada@example.com' } });
+  return { admin, ada };
+}
+
+scenario('members log daily scouting; the admin sees the board; reminders go to those who have not logged', async (t, makeStore) => {
+  const sent = [];
+  const notifier = { enabled: true, canEmailAnyone: true, async send(m) { sent.push(m); return { sent: true }; } };
+  const { base, close } = await startServer(makeStore, { notifier, cronSecret: 'cron-test' });
+  t.after(close);
+  const { admin, ada } = await teamWithMember(base);
+  const today = teamDay();
+  const yesterday = teamDay(-1);
+
+  // Validation
+  assert.equal((await ada(`/api/me/scouting/${teamDay(-5)}`, { method: 'PUT', body: { dms: 1 } })).status, 400);
+  assert.equal((await ada(`/api/me/scouting/${today}`, { method: 'PUT', body: { dms: -1 } })).status, 400);
+  assert.equal((await ada(`/api/me/scouting/${today}`, { method: 'PUT', body: { dms: 3, podcasts: [{ title: 'Diary of a CEO' }] } })).status, 400);
+
+  // Reminder before logging: Ada gets one, the admin does not.
+  assert.equal((await client(base)('/api/cron/scouting-reminder')).status, 401);
+  let r = await rawFetch(base, client(base), '/api/cron/scouting-reminder', { headers: { Authorization: 'Bearer cron-test' } });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).reminded, 1);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'ada@example.com');
+
+  // Log yesterday and today; saving the same day again updates it.
+  await ada(`/api/me/scouting/${yesterday}`, { method: 'PUT', body: { dms: 10, posts: 1, engagements: 20 } });
+  await ada(`/api/me/scouting/${today}`, { method: 'PUT', body: { dms: 5, posts: 0, engagements: 5 } });
+  const long = 'x'.repeat(1400);
+  let res = await ada(`/api/me/scouting/${today}`, {
+    method: 'PUT',
+    body: { dms: '25', posts: 2, engagements: 40, podcasts: [{ title: 'Diary of a CEO', speaker: 'Steven Bartlett', lesson: 'Consistency beats talent' }, { title: 'My First Million', speaker: '', lesson: long }] },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.entries.length, 2);
+  assert.equal(res.body.streak, 2);
+  assert.deepEqual([res.body.week.dms, res.body.week.posts, res.body.week.engagements, res.body.week.podcasts], [35, 3, 60, 2]);
+  const todayEntry = res.body.entries.find((e) => e.date === today);
+  assert.equal(todayEntry.podcasts[1].lesson.length, 1400); // long notes survive storage
+
+  // No reminder once logged.
+  sent.length = 0;
+  r = await rawFetch(base, client(base), '/api/cron/scouting-reminder', { headers: { Authorization: 'Bearer cron-test' } });
+  assert.equal((await r.json()).reminded, 0);
+  assert.equal(sent.length, 0);
+
+  // Admin board
+  assert.equal((await ada('/api/admin/scouting')).status, 403);
+  const board = (await admin('/api/admin/scouting')).body;
+  const row = board.members.find((m) => m.username === 'ada');
+  assert.equal(row.today.dms, 25);
+  assert.equal(row.streak, 2);
+  assert.equal(board.members.find((m) => m.username === 'boss'), undefined); // the admin isn't a scout
+  const hist = (await admin(`/api/admin/members/${row.id}/scouting`)).body;
+  assert.equal(hist.entries[0].podcasts[0].speaker, 'Steven Bartlett');
+});
+
+scenario('monthly goals: add (not edit/delete), tick off, carry over, admin sees and comments', async (t, makeStore) => {
+  const sent = [];
+  const notifier = { enabled: true, canEmailAnyone: true, async send(m) { sent.push(m); return { sent: true }; } };
+  const { base, close } = await startServer(makeStore, { notifier });
+  t.after(close);
+  const { admin, ada } = await teamWithMember(base);
+  await admin('/api/admin/notify-email', { method: 'PUT', body: { email: 'boss@example.com' } });
+  const month = teamDay().slice(0, 7);
+
+  assert.equal((await ada('/api/me/goals', { method: 'POST', body: { month, goals: [] } })).status, 400);
+  assert.equal((await ada('/api/me/goals', { method: 'POST', body: { month: '2020-01', goals: ['x'] } })).status, 400);
+
+  sent.length = 0;
+  let res = await ada('/api/me/goals', { method: 'POST', body: { month, goals: ['Close 3 clients', '  ', 'Post daily'] } });
+  assert.equal(res.status, 201);
+  assert.deepEqual(res.body.goals.map((g) => g.text), ['Close 3 clients', 'Post daily']);
+  assert.equal(sent.length, 1); // admin told
+  assert.equal(sent[0].to, 'boss@example.com');
+  assert.match(sent[0].subject, /Ada Obi sent 2 goals/);
+
+  // Tick one off; nobody else can.
+  const [g1] = res.body.goals;
+  assert.equal((await admin(`/api/me/goals/${g1.id}`, { method: 'PATCH', body: { done: true } })).status, 404);
+  assert.equal((await ada(`/api/me/goals/${g1.id}`, { method: 'PATCH', body: { done: true } })).status, 200);
+  res = await ada(`/api/me/goals?month=${month}`);
+  assert.equal(res.body.goals.find((g) => g.id === g1.id).done, true);
+  assert.ok(res.body.goals.find((g) => g.id === g1.id).doneAt);
+
+  // No edit or delete endpoints.
+  assert.equal((await ada(`/api/me/goals/${g1.id}`, { method: 'DELETE' })).status, 404);
+  assert.equal((await ada(`/api/me/goals/${g1.id}`, { method: 'PATCH', body: { text: 'changed' } })).status, 400);
+
+  // Next month: carry over the unfinished goal only, once.
+  const next = (() => { const [y, m] = month.split('-').map(Number); return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7); })();
+  res = await ada(`/api/me/goals?month=${next}`);
+  assert.equal(res.body.carryOver, 1);
+  res = await ada('/api/me/goals/carry-over', { method: 'POST', body: { month: next } });
+  assert.deepEqual(res.body.goals.map((g) => g.text), ['Post daily']);
+  res = await ada('/api/me/goals/carry-over', { method: 'POST', body: { month: next } });
+  assert.equal(res.body.goals.length, 1);
+
+  // Admin view + comment (emailed to the member).
+  const board = (await admin(`/api/admin/goals?month=${month}`)).body;
+  const mine = board.members.find((m) => m.username === 'ada');
+  assert.equal(mine.goals.length, 2);
+  assert.equal(mine.goals.filter((g) => g.done).length, 1);
+  sent.length = 0;
+  assert.equal((await ada('/api/admin/goals/comment', { method: 'PUT', body: { userId: mine.id, month, comment: 'x' } })).status, 403);
+  await admin('/api/admin/goals/comment', { method: 'PUT', body: { userId: mine.id, month, comment: 'Great start — push on the clients.' } });
+  assert.equal((await ada(`/api/me/goals?month=${month}`)).body.comment, 'Great start — push on the clients.');
+  assert.equal(sent[0].to, 'ada@example.com');
+  // Goal comments don't leak into team settings.
+  assert.equal((await ada('/api/state')).body.teamName, 'Team Prime');
 });

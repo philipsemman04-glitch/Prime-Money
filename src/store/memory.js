@@ -10,6 +10,43 @@ class MemoryStore {
     this.requests = new Map();
     this.receipts = new Map();
     this.announcements = new Map();
+    this.scouting = new Map();
+    this.goals = new Map();
+  }
+
+  async listScouting({ userId, from, to } = {}) {
+    return [...this.scouting.values()]
+      .filter((e) => (!userId || e.userId === userId) && (!from || e.date >= from) && (!to || e.date <= to))
+      .map((e) => structuredClone(e));
+  }
+
+  async saveScouting({ memberName, ...entry }) {
+    const existing = [...this.scouting.values()].find((e) => e.userId === entry.userId && e.date === entry.date);
+    const saved = { id: existing?.id ?? crypto.randomUUID(), ...structuredClone(entry), updatedAt: new Date().toISOString() };
+    this.scouting.set(saved.id, saved);
+    return structuredClone(saved);
+  }
+
+  async listGoals({ userId, month } = {}) {
+    return [...this.goals.values()]
+      .filter((g) => (!userId || g.userId === userId) && (!month || g.month === month))
+      .map((g) => ({ ...g }));
+  }
+
+  async getGoal(id) {
+    const g = this.goals.get(id);
+    return g ? { ...g } : null;
+  }
+
+  async createGoal({ userId, month, text }) {
+    const g = { id: crypto.randomUUID(), userId, month, text, done: false, doneAt: null, createdAt: new Date().toISOString() };
+    this.goals.set(g.id, g);
+    return { ...g };
+  }
+
+  async setGoalDone(id, done) {
+    const g = this.goals.get(id);
+    if (g) Object.assign(g, { done, doneAt: done ? new Date().toISOString().slice(0, 10) : null });
   }
 
   async listAnnouncements() {

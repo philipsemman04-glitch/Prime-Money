@@ -20,6 +20,11 @@ const SCHEMAS = {
     'Admin note': 'rich_text', Decided: 'date', 'Transaction ID': 'rich_text', Receipt: 'files',
   },
   settings: { Key: 'title', Value: 'rich_text' },
+  scouting: {
+    Entry: 'title', Member: 'relation', Date: 'date', DMs: 'number', Posts: 'number', Engagements: 'number',
+    'Podcast notes': 'rich_text', 'Podcasts data': 'rich_text',
+  },
+  goals: { Goal: 'title', Member: 'relation', Month: 'rich_text', Done: 'checkbox', 'Done on': 'date' },
 };
 
 function notFound() {
@@ -28,7 +33,7 @@ function notFound() {
 
 class FakeNotion {
   constructor(ids, { pageSize = 2 } = {}) {
-    this.schemaFor = { [ids.membersId]: SCHEMAS.members, [ids.transactionsId]: SCHEMAS.transactions, [ids.settingsId]: SCHEMAS.settings, [ids.requestsId]: SCHEMAS.requests };
+    this.schemaFor = { [ids.membersId]: SCHEMAS.members, [ids.transactionsId]: SCHEMAS.transactions, [ids.settingsId]: SCHEMAS.settings, [ids.requestsId]: SCHEMAS.requests, [ids.scoutingId]: SCHEMAS.scouting, [ids.goalsId]: SCHEMAS.goals };
     this.pageSize = pageSize; // small, to exercise pagination
     this.pages = new Map();
     this.calls = 0;
@@ -123,6 +128,7 @@ class FakeNotion {
       if (!d) return false;
       if (filter.date.on_or_after && d < filter.date.on_or_after) return false;
       if (filter.date.before && d >= filter.date.before) return false;
+      if (filter.date.on_or_before && d > filter.date.on_or_before) return false;
       return true;
     }
     throw new Error(`Unsupported filter ${JSON.stringify(filter)}`);

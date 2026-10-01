@@ -105,6 +105,12 @@ const ICONS = {
   trash: svg('<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>', 16),
   receipt: svg('<path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 1V2l-1 1-3-2-3 2-3-2-3 2-3-2z"/><path d="M8 7h8M8 11h8M8 15h5"/>', 18),
   upload: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>', 26),
+  scout: svg('<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6M8 11h6"/>'),
+  target: svg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>'),
+  mic: svg('<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v5"/>', 18),
+  dm: svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>', 18),
+  post: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>', 18),
+  heartSm: svg('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>', 18),
   megaphone: svg('<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>'),
   inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>', 28),
   briefcase: svg('<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>', 18),
@@ -282,6 +288,8 @@ function renderShell() {
   const links = [['#/', 'Dashboard', ICONS.home]];
   if (isAdmin) links.push(['#/team', 'Team', ICONS.team]);
   links.push(['#/requests', 'Requests', ICONS.send, isAdmin ? pending : 0]);
+  links.push(['#/scouting', 'Scouting', ICONS.scout]);
+  links.push(['#/goals', 'Goals', ICONS.target]);
   links.push(['#/account', 'Account', ICONS.user]);
   document.getElementById('nav').innerHTML = links
     .map(([href, text, icon, badge]) => {
@@ -381,6 +389,10 @@ function route() {
   if (hash === '#/team' && user.role === 'admin') return renderTeam();
   if (hash.startsWith('#/requests/new')) return renderNewRequest(new URLSearchParams(hash.split('?')[1] || '').get('pot'));
   if (hash === '#/requests') return user.role === 'admin' ? renderReviewRequests() : renderMyRequests();
+  const scoutMember = hash.match(/^#\/scouting\/([\w-]+)$/);
+  if (scoutMember && user.role === 'admin') return renderMemberScouting(scoutMember[1]);
+  if (hash === '#/scouting') return user.role === 'admin' ? renderScoutingBoard() : renderMyScouting();
+  if (hash === '#/goals') return user.role === 'admin' ? renderGoalsBoard() : renderMyGoals();
   if (hash === '#/account') return renderAccount();
   return renderDashboard();
 }
@@ -1415,6 +1427,302 @@ async function renderReviewRequests(filter = state.requestFilter || 'pending') {
         toast('Request declined');
         renderReviewRequests();
       });
+    }),
+  );
+}
+
+// --- scouting -------------------------------------------------------------
+
+const prettyDay = (day, opts = { weekday: 'short', day: 'numeric', month: 'short' }) =>
+  new Date(`${day}T00:00:00`).toLocaleDateString(undefined, opts);
+const shiftDay = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+
+function statTiles(t, label) {
+  return `
+    <div class="mini-label">${esc(label)}</div>
+    <div class="stat-tiles">
+      <div><span class="ico dm">${ICONS.dm}</span><b>${t.dms}</b><small>DMs</small></div>
+      <div><span class="ico post">${ICONS.post}</span><b>${t.posts}</b><small>Posts</small></div>
+      <div><span class="ico eng">${ICONS.heartSm}</span><b>${t.engagements}</b><small>Engagements</small></div>
+      <div><span class="ico podc">${ICONS.mic}</span><b>${t.podcasts}</b><small>Podcasts</small></div>
+    </div>`;
+}
+
+function scoutingStatsCard(data) {
+  return `
+    <section class="card">
+      <div class="card-head"><h2>Your progress</h2></div>
+      <div class="streak"><span>🔥</span><div><b>${data.streak} day${data.streak === 1 ? '' : 's'}</b><small>${data.streak ? 'logging in a row' : 'Log today to start a streak'}</small></div></div>
+      ${statTiles(data.week, 'Last 7 days')}
+      ${statTiles(data.month, 'This month')}
+    </section>`;
+}
+
+function scoutingHistory(entries, title = 'History') {
+  if (!entries.length) return `<section class="card"><div class="card-head"><h2>${esc(title)}</h2></div><div class="empty">${ICONS.inbox}No scouting logged yet.</div></section>`;
+  return `
+    <section class="card">
+      <div class="card-head"><h2>${esc(title)}</h2><span class="sub">Last 60 days</span></div>
+      <div class="day-list">
+        ${entries
+          .map(
+            (e) => `
+          <details class="day" ${e === entries[0] ? 'open' : ''}>
+            <summary>
+              <b>${esc(prettyDay(e.date))}</b>
+              <span class="chips"><span>${ICONS.dm}${e.dms}</span><span>${ICONS.post}${e.posts}</span><span>${ICONS.heartSm}${e.engagements}</span><span>${ICONS.mic}${e.podcasts.length}</span></span>
+            </summary>
+            ${
+              e.podcasts.length
+                ? e.podcasts
+                    .map(
+                      (p) => `<div class="pod"><div class="pod-title">${ICONS.mic}<b>${esc(p.title)}</b>${p.speaker ? `<span>· ${esc(p.speaker)}</span>` : ''}</div><p>${esc(p.lesson)}</p></div>`,
+                    )
+                    .join('')
+                : '<p class="muted" style="margin:6px 0 0;font-size:13px">No podcasts this day.</p>'
+            }
+          </details>`,
+          )
+          .join('')}
+      </div>
+    </section>`;
+}
+
+async function renderMyScouting(day) {
+  setTitle('Scouting', 'Log your outreach and learning every day');
+  const data = await api('/api/me/scouting');
+  const yesterday = shiftDay(data.today, -1);
+  day = day === yesterday ? yesterday : data.today;
+  const entry = data.entries.find((e) => e.date === day) || { dms: '', posts: '', engagements: '', podcasts: [] };
+
+  app.innerHTML = `
+    <div class="grid">
+      <div class="s7"><section class="card">
+        <div class="card-head">
+          <h2>${day === data.today ? "Today's scouting" : "Yesterday's scouting"}</h2>
+          <div class="seg">
+            <button type="button" data-day="${data.today}" class="${day === data.today ? 'on' : ''}">Today</button>
+            <button type="button" data-day="${yesterday}" class="${day === yesterday ? 'on' : ''}">Yesterday</button>
+          </div>
+        </div>
+        <p class="muted" style="margin:-8px 0 16px;font-size:13px">${esc(prettyDay(day, { weekday: 'long', day: 'numeric', month: 'long' }))}${data.entries.some((e) => e.date === day) ? ' · saved — you can update it' : ''}</p>
+        <form id="scout">
+          <div class="num-row">
+            <label><span class="num-ico dm">${ICONS.dm}</span>Scouting DMs sent<input name="dms" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.dms)}"></label>
+            <label><span class="num-ico post">${ICONS.post}</span>Posts posted<input name="posts" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.posts)}"></label>
+            <label><span class="num-ico eng">${ICONS.heartSm}</span>Engagements<input name="engagements" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.engagements)}"></label>
+          </div>
+          <div class="card-head" style="margin:8px 0 12px"><h2 style="font-size:15px">${ICONS.mic} Podcasts watched</h2></div>
+          <div id="pods"></div>
+          <button type="button" class="btn soft small" id="add-pod">${ICONS.plus} Add podcast</button>
+          <div class="error" style="margin-top:12px"></div>
+          <button class="btn block" type="submit">Save scouting</button>
+        </form>
+      </section></div>
+      <div class="s5">${scoutingStatsCard(data)}</div>
+      <div class="s12">${scoutingHistory(data.entries, 'Your scouting history')}</div>
+    </div>`;
+
+  const pods = app.querySelector('#pods');
+  const addPod = (p = {}) => {
+    const row = document.createElement('div');
+    row.className = 'pod-row';
+    row.innerHTML = `
+      <div class="row2">
+        <label>Podcast / episode <input class="p-title" maxlength="150" placeholder="e.g. Diary of a CEO" value="${esc(p.title || '')}"></label>
+        <label>Who was speaking <input class="p-speaker" maxlength="100" placeholder="e.g. Alex Hormozi" value="${esc(p.speaker || '')}"></label>
+      </div>
+      <label>What did you learn? <textarea class="p-lesson" rows="3" maxlength="1500" placeholder="The key lessons you took away">${esc(p.lesson || '')}</textarea></label>
+      <button type="button" class="link-btn remove-pod" style="color:var(--expense)">${ICONS.trash} Remove</button>`;
+    row.querySelector('.remove-pod').addEventListener('click', () => row.remove());
+    pods.appendChild(row);
+  };
+  (entry.podcasts.length ? entry.podcasts : []).forEach(addPod);
+  app.querySelector('#add-pod').addEventListener('click', () => addPod());
+  app.querySelectorAll('[data-day]').forEach((b) => b.addEventListener('click', () => renderMyScouting(b.dataset.day)));
+  onSubmit(app.querySelector('#scout'), async (d) => {
+    const podcasts = [...pods.querySelectorAll('.pod-row')].map((r) => ({
+      title: r.querySelector('.p-title').value,
+      speaker: r.querySelector('.p-speaker').value,
+      lesson: r.querySelector('.p-lesson').value,
+    }));
+    await api(`/api/me/scouting/${day}`, { method: 'PUT', body: { dms: d.dms, posts: d.posts, engagements: d.engagements, podcasts } });
+    toast('Scouting saved');
+    renderMyScouting(day);
+  });
+}
+
+async function renderScoutingBoard() {
+  setTitle('Scouting', "Your team's daily outreach");
+  const data = await api('/api/admin/scouting');
+  const logged = data.members.filter((m) => m.today).length;
+  const rows = data.members
+    .map(
+      (m, i) => `
+    <tr class="clickable" data-scout="${esc(m.id)}">
+      <td><div class="person"><span class="avatar sm ${m.role === 'admin' ? '' : 'blue'}">${esc(initials(m.displayName))}</span><div><strong>${i < 3 && m.week.dms ? ['🥇', '🥈', '🥉'][i] + ' ' : ''}${esc(m.displayName)}</strong><div class="sub">${m.username ? '@' + esc(m.username) : ''}</div></div></div></td>
+      <td>${m.today ? '<span class="pill active">Logged</span>' : '<span class="pill declined">Not yet</span>'}</td>
+      <td class="num">${m.today ? m.today.dms : '—'}</td>
+      <td class="num">${m.today ? m.today.posts : '—'}</td>
+      <td class="num">${m.today ? m.today.engagements : '—'}</td>
+      <td class="num">${m.today ? m.today.podcasts.length : '—'}</td>
+      <td class="num"><b>${m.week.dms}</b> / ${m.week.posts} / ${m.week.engagements}</td>
+      <td class="num">${m.streak ? `🔥 ${m.streak}` : '0'}</td>
+    </tr>`,
+    )
+    .join('');
+  const team = data.members.reduce(
+    (t, m) => ({ dms: t.dms + m.week.dms, posts: t.posts + m.week.posts, engagements: t.engagements + m.week.engagements, podcasts: t.podcasts + m.week.podcasts }),
+    { dms: 0, posts: 0, engagements: 0, podcasts: 0 },
+  );
+  app.innerHTML = `
+    <div class="grid">
+      <div class="s4"><section class="card">
+        <div class="card-head"><h2>Today</h2><span class="sub">${esc(prettyDay(data.today, { weekday: 'long', day: 'numeric', month: 'long' }))}</span></div>
+        <div class="big-count"><b>${logged}</b><span>of ${data.members.length} logged</span></div>
+        <div class="track" style="margin-top:12px"><div style="width:${data.members.length ? (logged / data.members.length) * 100 : 0}%;background:var(--income)"></div></div>
+        <p class="muted" style="font-size:13px;margin:12px 0 0">Anyone who hasn't logged by the evening gets an email reminder.</p>
+      </section></div>
+      <div class="s8"><section class="card">${statTiles(team, 'Whole team · last 7 days')}</section></div>
+      <div class="s12"><section class="card">
+        <div class="card-head"><h2>Team board</h2><span class="sub">Ranked by DMs in the last 7 days · click a member for their history</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Member</th><th>Today</th><th class="num">DMs</th><th class="num">Posts</th><th class="num">Engag.</th><th class="num">Podcasts</th><th class="num">7 days (DM / post / eng.)</th><th class="num">Streak</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>
+      </section></div>
+    </div>`;
+  app.querySelectorAll('[data-scout]').forEach((r) => r.addEventListener('click', () => (location.hash = `#/scouting/${r.dataset.scout}`)));
+}
+
+async function renderMemberScouting(id) {
+  const data = await api(`/api/admin/members/${id}/scouting`);
+  setTitle(`${data.member.displayName} · Scouting`, data.member.username ? '@' + data.member.username : '');
+  app.innerHTML = `
+    <a class="link-btn" href="#/scouting">${ICONS.left} Back to team board</a>
+    <div class="grid">
+      <div class="s5">${scoutingStatsCard(data).replace('Your progress', 'Progress')}</div>
+      <div class="s7">${scoutingHistory(data.entries, 'Daily log')}</div>
+    </div>`;
+}
+
+// --- goals ------------------------------------------------------------------
+
+function goalList(goals, { editable }) {
+  if (!goals.length) return `<div class="empty">${ICONS.target.replace('width="20" height="20"', 'width="28" height="28"')}No goals for this month yet.</div>`;
+  return `<ul class="goal-list">${goals
+    .map(
+      (g) => `<li class="goal ${g.done ? 'done' : ''}">
+        <label>
+          <input type="checkbox" ${g.done ? 'checked' : ''} ${editable ? `data-goal="${esc(g.id)}"` : 'disabled'}>
+          <span class="box">${ICONS.check}</span>
+          <span class="goal-text">${esc(g.text)}</span>
+        </label>
+        ${g.done && g.doneAt ? `<small>Done ${esc(prettyDay(g.doneAt, { day: 'numeric', month: 'short' }))}</small>` : ''}
+      </li>`,
+    )
+    .join('')}</ul>`;
+}
+
+function progressBar(goals) {
+  const done = goals.filter((g) => g.done).length;
+  const pct = goals.length ? Math.round((done / goals.length) * 100) : 0;
+  return `<div class="goal-progress"><div><b>${done} of ${goals.length}</b> done</div><span>${pct}%</span></div>
+    <div class="track" style="height:10px"><div style="width:${pct}%;background:linear-gradient(90deg,var(--gold-bright),var(--gold))"></div></div>`;
+}
+
+async function renderMyGoals() {
+  setTitle('Goals', 'Your monthly goals');
+  const data = await api(`/api/me/goals?month=${state.month}`);
+  app.innerHTML = `
+    <div class="grid">
+      <div class="s7"><section class="card">
+        <div class="card-head"><h2>${esc(monthLabel(state.month))}</h2>${monthNav()}</div>
+        ${progressBar(data.goals)}
+        <div style="margin-top:18px">${goalList(data.goals, { editable: true })}</div>
+        ${data.comment ? `<div class="note-box" style="margin-top:16px"><b style="color:var(--text)">Comment from your admin:</b> ${esc(data.comment)}</div>` : ''}
+      </section></div>
+      <div class="s5">
+        ${
+          data.canAdd
+            ? `<section class="card">
+          <div class="card-head"><h2>Add goals</h2></div>
+          ${data.carryOver ? `<div class="warn" style="margin-bottom:14px;display:flex;align-items:center;gap:10px;justify-content:space-between">You have ${data.carryOver} unfinished goal${data.carryOver > 1 ? 's' : ''} from ${esc(monthLabel(shiftMonth(state.month, -1)))}. <button type="button" class="btn small" id="carry">Carry over</button></div>` : ''}
+          <form id="goals-form">
+            <label>Your goals — one per line <textarea name="goals" rows="6" placeholder="Close 3 new clients&#10;Post every day&#10;Read 2 books"></textarea></label>
+            <div class="error"></div>
+            <button class="btn block" type="submit">${ICONS.send} Send to admin</button>
+            <p class="muted" style="font-size:12px;margin:10px 0 0;text-align:center">Once sent, goals can't be edited or deleted — you can only add more and tick them off.</p>
+          </form>
+        </section>`
+            : `<section class="card"><div class="card-head"><h2>Past month</h2></div><p class="muted" style="margin:0">Goals can only be added for this month or next month. You can still tick these off.</p></section>`
+        }
+      </div>
+    </div>`;
+  bindMonthNav(renderMyGoals);
+  app.querySelectorAll('[data-goal]').forEach((c) =>
+    c.addEventListener('change', async () => {
+      c.closest('.goal').classList.toggle('done', c.checked);
+      try {
+        await api(`/api/me/goals/${c.dataset.goal}`, { method: 'PATCH', body: { done: c.checked } });
+        if (c.checked) toast('Nice work — goal completed 🎉');
+        renderMyGoals();
+      } catch (err) {
+        toast(err.message);
+        renderMyGoals();
+      }
+    }),
+  );
+  app.querySelector('#carry')?.addEventListener('click', async () => {
+    await api('/api/me/goals/carry-over', { method: 'POST', body: { month: state.month } });
+    toast('Unfinished goals carried over');
+    renderMyGoals();
+  });
+  const form = app.querySelector('#goals-form');
+  if (form) {
+    onSubmit(form, async (d) => {
+      const goals = d.goals.split('\n').map((g) => g.trim()).filter(Boolean);
+      if (!goals.length) throw new Error('Write at least one goal.');
+      if (!confirm(`Send ${goals.length} goal${goals.length > 1 ? 's' : ''} to your admin? They can't be edited or deleted afterwards.`)) return;
+      await api('/api/me/goals', { method: 'POST', body: { month: state.month, goals } });
+      toast('Goals sent to your admin');
+      renderMyGoals();
+    });
+  }
+}
+
+async function renderGoalsBoard() {
+  setTitle('Goals', "Your team's monthly goals");
+  const data = await api(`/api/admin/goals?month=${state.month}`);
+  const cards = data.members
+    .map(
+      (m) => `
+    <div class="s6"><section class="card">
+      <div class="card-head"><div class="person"><span class="avatar sm ${m.role === 'admin' ? '' : 'blue'}">${esc(initials(m.displayName))}</span><div><strong>${esc(m.displayName)}</strong><div class="sub">${m.username ? '@' + esc(m.username) : ''}</div></div></div></div>
+      ${m.goals.length ? progressBar(m.goals) : ''}
+      <div style="margin-top:14px">${goalList(m.goals, { editable: false })}</div>
+      <form class="comment-form" data-user="${esc(m.id)}" style="margin-top:14px">
+        <label>Your comment <textarea name="comment" rows="2" maxlength="1000" placeholder="Feedback for ${esc(m.displayName.split(' ')[0])}">${esc(m.comment)}</textarea></label>
+        <div class="error"></div>
+        <button class="btn soft small" type="submit">Save comment</button>
+      </form>
+    </section></div>`,
+    )
+    .join('');
+  const all = data.members.flatMap((m) => m.goals);
+  app.innerHTML = `
+    <div class="grid">
+      <div class="s12"><section class="card">
+        <div class="card-head"><h2>${esc(monthLabel(state.month))}</h2>${monthNav()}</div>
+        ${all.length ? progressBar(all) : '<p class="muted" style="margin:0">No goals have been sent for this month yet.</p>'}
+      </section></div>
+      ${cards}
+    </div>`;
+  bindMonthNav(renderGoalsBoard);
+  app.querySelectorAll('.comment-form').forEach((f) =>
+    onSubmit(f, async (d) => {
+      await api('/api/admin/goals/comment', { method: 'PUT', body: { userId: f.dataset.user, month: state.month, comment: d.comment } });
+      toast('Comment saved');
     }),
   );
 }

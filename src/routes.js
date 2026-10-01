@@ -2,7 +2,48 @@ const path = require('node:path');
 const express = require('express');
 const auth = require('./auth');
 const { getNgnRate } = require('./rates');
-const { createNotifier, fundRequestEmail, memberRequestEmail } = require('./notify');
+const {
+  createNotifier,
+  fundRequestEmail,
+  memberRequestEmail,
+  scoutingReminderEmail,
+  goalsSentEmail,
+  goalCommentEmail,
+} = require('./notify');
+
+// Dates for scouting and goals follow the team's time zone (Lagos by default).
+const TEAM_TZ = process.env.TEAM_TIMEZONE || 'Africa/Lagos';
+const dayIn = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: TEAM_TZ }).format(d); // YYYY-MM-DD
+const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const monthName = (month) =>
+  new Date(`${month}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+// Scouting summary for one member from their recent entries.
+function scoutingSummary(entries, today) {
+  const days = new Set(entries.map((e) => e.date));
+  let streak = 0;
+  let day = days.has(today) ? today : addDays(today, -1);
+  while (days.has(day)) {
+    streak++;
+    day = addDays(day, -1);
+  }
+  const sum = (list) => ({
+    dms: list.reduce((s, e) => s + e.dms, 0),
+    posts: list.reduce((s, e) => s + e.posts, 0),
+    engagements: list.reduce((s, e) => s + e.engagements, 0),
+    podcasts: list.reduce((s, e) => s + e.podcasts.length, 0),
+    days: list.length,
+  });
+  const weekStart = addDays(today, -6);
+  return {
+    streak,
+    week: sum(entries.filter((e) => e.date >= weekStart && e.date <= today)),
+    month: sum(entries.filter((e) => e.date.slice(0, 7) === today.slice(0, 7))),
+  };
+}
+
+const publicScouting = (e) => ({ date: e.date, dms: e.dms, posts: e.posts, engagements: e.engagements, podcasts: e.podcasts });
+const publicGoal = (g) => ({ id: g.id, text: g.text, month: g.month, done: g.done, doneAt: g.doneAt, createdAt: g.createdAt });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -162,7 +203,7 @@ async function dashboardFor(store, userId, month) {
   };
 }
 
-function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate, notifier = createNotifier() } = {}) {
+function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate, notifier = createNotifier(), cronSecret } = {}) {
   if (!sessionSecret) throw new Error('sessionSecret is required');
   const app = express();
 
@@ -187,6 +228,27 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     } catch (err) {
       console.error(`Member ${kind} email failed:`, err.message);
     }
+  }
+
+  const appUrl = (req, hash) => `${req.protocol}://${req.get('host')}/${hash}`;
+  async function sendQuietly(label, msg) {
+    if (!notifier.enabled || !msg.to) return;
+    try {
+      await notifier.send(msg);
+    } catch (err) {
+      console.error(`${label} email failed:`, err.message);
+    }
+  }
+
+  async function scoutingFor(userId) {
+    const today = dayIn();
+    const entries = (await store.listScouting({ userId, from: addDays(today, -62) })).sort((a, b) => b.date.localeCompare(a.date));
+    return { today, entries: entries.map(publicScouting), ...scoutingSummary(entries, today) };
+  }
+
+  async function goalsFor(userId, month) {
+    const [goals, comment] = await Promise.all([store.listGoals({ userId, month }), store.getSetting(`goal_comment:${userId}:${month}`)]);
+    return { month, goals: goals.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).map(publicGoal), comment: comment || '' };
   }
 
   // --- middleware -------------------------------------------------------
@@ -427,6 +489,112 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     res.json({ ok: true });
   });
 
+  // --- scouting (daily log) ---------------------------------------------
+
+  app.get('/api/me/scouting', requireUser, async (req, res) => {
+    res.json(await scoutingFor(req.user.id));
+  });
+
+  const count = (v) => {
+    const n = Number(v === '' || v === undefined || v === null ? 0 : v);
+    return Number.isInteger(n) && n >= 0 && n <= 100000 ? n : null;
+  };
+
+  app.put('/api/me/scouting/:date', requireUser, async (req, res) => {
+    const date = req.params.date;
+    const today = dayIn();
+    if (date !== today && date !== addDays(today, -1)) {
+      return res.status(400).json({ error: 'You can only log today or fix yesterday.' });
+    }
+    const dms = count(req.body?.dms);
+    const posts = count(req.body?.posts);
+    const engagements = count(req.body?.engagements);
+    if (dms === null || posts === null || engagements === null) {
+      return res.status(400).json({ error: 'DMs, posts and engagements must be whole numbers.' });
+    }
+    const raw = Array.isArray(req.body?.podcasts) ? req.body.podcasts : [];
+    if (raw.length > 10) return res.status(400).json({ error: 'Up to 10 podcasts per day.' });
+    const podcasts = [];
+    for (const p of raw) {
+      const title = String(p?.title ?? '').trim();
+      const speaker = String(p?.speaker ?? '').trim();
+      const lesson = String(p?.lesson ?? '').trim();
+      if (!title && !speaker && !lesson) continue; // empty row
+      if (!title || title.length > 150) return res.status(400).json({ error: 'Each podcast needs a name (up to 150 characters).' });
+      if (speaker.length > 100) return res.status(400).json({ error: 'Speaker name is too long.' });
+      if (!lesson || lesson.length > 1500) return res.status(400).json({ error: `Write what you learnt from "${title}".` });
+      podcasts.push({ title, speaker, lesson });
+    }
+    await store.saveScouting({ userId: req.user.id, memberName: req.user.displayName, date, dms, posts, engagements, podcasts });
+    res.json(await scoutingFor(req.user.id));
+  });
+
+  // --- goals (monthly) ---------------------------------------------------
+
+  const goalMonths = () => {
+    const now = dayIn().slice(0, 7);
+    const next = addDays(`${now}-28`, 7).slice(0, 7);
+    return [now, next];
+  };
+
+  app.get('/api/me/goals', requireUser, async (req, res) => {
+    const month = parseMonth(req.query.month ?? dayIn().slice(0, 7));
+    if (!month) return res.status(400).json({ error: 'Month must look like YYYY-MM.' });
+    const data = await goalsFor(req.user.id, month);
+    const prev = shiftMonth(month, -1);
+    const prevGoals = await store.listGoals({ userId: req.user.id, month: prev });
+    const have = new Set(data.goals.map((g) => g.text.toLowerCase()));
+    const carryOver = prevGoals.filter((g) => !g.done && !have.has(g.text.toLowerCase())).length;
+    res.json({ ...data, canAdd: goalMonths().includes(month), carryOver });
+  });
+
+  app.post('/api/me/goals', requireUser, async (req, res) => {
+    const { month } = req.body ?? {};
+    if (!goalMonths().includes(month)) return res.status(400).json({ error: 'Goals can be added for this month or next month.' });
+    const texts = (Array.isArray(req.body?.goals) ? req.body.goals : []).map((g) => String(g ?? '').trim()).filter(Boolean);
+    if (!texts.length) return res.status(400).json({ error: 'Write at least one goal.' });
+    if (texts.length > 20) return res.status(400).json({ error: 'Up to 20 goals at a time.' });
+    if (texts.some((t) => t.length > 200)) return res.status(400).json({ error: 'Keep each goal under 200 characters.' });
+    const existing = await store.listGoals({ userId: req.user.id, month });
+    if (existing.length + texts.length > 50) return res.status(400).json({ error: 'That is more than 50 goals for one month.' });
+
+    const created = [];
+    for (const t of texts) created.push(await store.createGoal({ userId: req.user.id, month, text: t }));
+
+    if (req.user.role !== 'admin') {
+      const to = await store.getSetting('notify_email');
+      const teamName = (await store.getSetting('team_name')) || 'Team Prime';
+      await sendQuietly('Goals sent', {
+        to,
+        ...goalsSentEmail({ member: req.user, goals: created, monthLabel: monthName(month), teamName, url: appUrl(req, '#/goals') }),
+      });
+    }
+    res.status(201).json(await goalsFor(req.user.id, month));
+  });
+
+  // Copy last month's unfinished goals into this month.
+  app.post('/api/me/goals/carry-over', requireUser, async (req, res) => {
+    const { month } = req.body ?? {};
+    if (!goalMonths().includes(month)) return res.status(400).json({ error: 'Goals can be added for this month or next month.' });
+    const [prev, current] = await Promise.all([
+      store.listGoals({ userId: req.user.id, month: shiftMonth(month, -1) }),
+      store.listGoals({ userId: req.user.id, month }),
+    ]);
+    const have = new Set(current.map((g) => g.text.toLowerCase()));
+    const toCopy = prev.filter((g) => !g.done && !have.has(g.text.toLowerCase()));
+    for (const g of toCopy) await store.createGoal({ userId: req.user.id, month, text: g.text });
+    res.json(await goalsFor(req.user.id, month));
+  });
+
+  // Members can tick goals off (or untick a mistake) but not edit or delete them.
+  app.patch('/api/me/goals/:id', requireUser, async (req, res) => {
+    if (typeof req.body?.done !== 'boolean') return res.status(400).json({ error: 'Nothing to update.' });
+    const goal = await store.getGoal(req.params.id);
+    if (!goal || goal.userId !== req.user.id) return res.status(404).json({ error: 'Goal not found.' });
+    await store.setGoalDone(goal.id, req.body.done);
+    res.json({ ok: true });
+  });
+
   // --- fund requests (member side) -------------------------------------
 
   app.get('/api/me/requests', requireUser, async (req, res) => {
@@ -570,6 +738,102 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       sessionVersion: 0,
     });
     res.status(201).json({ id: user.id, inviteToken: token });
+  });
+
+  // --- admin: scouting & goals -------------------------------------------
+
+  app.get('/api/admin/scouting', requireUser, requireAdmin, async (req, res) => {
+    const today = dayIn();
+    const [users, entries] = await Promise.all([store.listUsers(), store.listScouting({ from: addDays(today, -62) })]);
+    const members = users
+      .filter((u) => u.status === 'active' && (u.role !== 'admin' || entries.some((e) => e.userId === u.id)))
+      .map((u) => {
+        const mine = entries.filter((e) => e.userId === u.id);
+        const todayEntry = mine.find((e) => e.date === today);
+        return {
+          id: u.id,
+          displayName: u.displayName,
+          username: u.username,
+          role: u.role,
+          today: todayEntry ? publicScouting(todayEntry) : null,
+          ...scoutingSummary(mine, today),
+        };
+      })
+      .sort((a, b) => b.week.dms - a.week.dms || a.displayName.localeCompare(b.displayName));
+    res.json({ today, members });
+  });
+
+  app.get('/api/admin/members/:id/scouting', requireUser, requireAdmin, async (req, res) => {
+    const member = await store.getUser(req.params.id);
+    if (!member) return res.status(404).json({ error: 'Member not found.' });
+    res.json({ member: publicUser(member), ...(await scoutingFor(member.id)) });
+  });
+
+  app.get('/api/admin/goals', requireUser, requireAdmin, async (req, res) => {
+    const month = parseMonth(req.query.month ?? dayIn().slice(0, 7));
+    if (!month) return res.status(400).json({ error: 'Month must look like YYYY-MM.' });
+    const [users, goals] = await Promise.all([store.listUsers(), store.listGoals({ month })]);
+    const members = await Promise.all(
+      users
+        .filter((u) => (u.status === 'active' && u.role !== 'admin') || goals.some((g) => g.userId === u.id))
+        .map(async (u) => ({
+          id: u.id,
+          displayName: u.displayName,
+          username: u.username,
+          role: u.role,
+          goals: goals
+            .filter((g) => g.userId === u.id)
+            .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+            .map(publicGoal),
+          comment: (await store.getSetting(`goal_comment:${u.id}:${month}`)) || '',
+        })),
+    );
+    res.json({ month, members: members.sort((a, b) => b.goals.length - a.goals.length || a.displayName.localeCompare(b.displayName)) });
+  });
+
+  app.put('/api/admin/goals/comment', requireUser, requireAdmin, async (req, res) => {
+    const { userId, month } = req.body ?? {};
+    const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() : '';
+    if (!parseMonth(month)) return res.status(400).json({ error: 'Month must look like YYYY-MM.' });
+    if (comment.length > 1000) return res.status(400).json({ error: 'Keep the comment under 1000 characters.' });
+    const member = await store.getUser(String(userId ?? ''));
+    if (!member) return res.status(404).json({ error: 'Member not found.' });
+    const key = `goal_comment:${member.id}:${month}`;
+    if (comment) await store.setSetting(key, comment);
+    else await store.deleteSetting(key);
+    if (comment && member.email) {
+      const teamName = (await store.getSetting('team_name')) || 'Team Prime';
+      await sendQuietly('Goal comment', {
+        to: member.email,
+        ...goalCommentEmail({ member, comment, monthLabel: monthName(month), teamName, url: appUrl(req, '#/goals') }),
+      });
+    }
+    res.json({ comment });
+  });
+
+  // Daily reminder (run by Vercel Cron in the evening): email members who
+  // have not logged today's scouting.
+  app.get('/api/cron/scouting-reminder', async (req, res) => {
+    if (!cronSecret) return res.status(503).json({ error: 'CRON_SECRET is not set.' });
+    if (req.get('authorization') !== `Bearer ${cronSecret}`) return res.status(401).json({ error: 'Unauthorised.' });
+    const today = dayIn();
+    const [users, entries, teamName] = await Promise.all([
+      store.listUsers(),
+      store.listScouting({ from: today, to: today }),
+      store.getSetting('team_name'),
+    ]);
+    const logged = new Set(entries.map((e) => e.userId));
+    const due = users.filter((u) => u.role === 'member' && u.status === 'active' && u.email && !logged.has(u.id));
+    let sent = 0;
+    for (const member of due) {
+      try {
+        await notifier.send({ to: member.email, ...scoutingReminderEmail({ member, teamName: teamName || 'Team Prime', url: appUrl(req, '#/scouting') }) });
+        sent++;
+      } catch (err) {
+        console.error('Scouting reminder failed:', err.message);
+      }
+    }
+    res.json({ date: today, reminded: sent, alreadyLogged: logged.size });
   });
 
   // --- admin: fund requests -------------------------------------------

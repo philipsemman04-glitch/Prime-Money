@@ -2,7 +2,16 @@
 // See README for how to create them and connect the integration.
 const { Client } = require('@notionhq/client');
 
-const text = (value) => (value ? [{ type: 'text', text: { content: String(value).slice(0, 2000) } }] : []);
+// Notion caps each text chunk at 2000 characters, so longer values are split.
+const text = (value) => {
+  if (!value) return [];
+  const str = String(value);
+  const chunks = [];
+  for (let i = 0; i < str.length && chunks.length < 100; i += 2000) {
+    chunks.push({ type: 'text', text: { content: str.slice(i, i + 2000) } });
+  }
+  return chunks;
+};
 const readText = (prop) => (prop?.rich_text ?? prop?.title ?? []).map((t) => t.plain_text).join('') || null;
 const readSelect = (prop) => prop?.select?.name ?? null;
 const readNumber = (prop) => (typeof prop?.number === 'number' ? prop.number : null);
@@ -92,6 +101,52 @@ function toRequest(page) {
   };
 }
 
+function toScouting(page) {
+  const p = page.properties;
+  let podcasts = [];
+  try {
+    podcasts = JSON.parse(readText(p['Podcasts data']) || '[]');
+  } catch {}
+  return {
+    id: page.id,
+    userId: p['Member']?.relation?.[0]?.id ?? null,
+    date: readDate(p['Date']),
+    dms: readNumber(p['DMs']) ?? 0,
+    posts: readNumber(p['Posts']) ?? 0,
+    engagements: readNumber(p['Engagements']) ?? 0,
+    podcasts,
+    updatedAt: page.last_edited_time ?? page.created_time,
+  };
+}
+
+function scoutingProperties(e) {
+  return {
+    Entry: { title: text(`${e.memberName ?? 'Member'} · ${e.date}`) },
+    Member: { relation: [{ id: e.userId }] },
+    Date: date(e.date),
+    DMs: { number: e.dms },
+    Posts: { number: e.posts },
+    Engagements: { number: e.engagements },
+    'Podcast notes': {
+      rich_text: text(e.podcasts.map((x) => `${x.title}${x.speaker ? ` (${x.speaker})` : ''}: ${x.lesson}`).join('\n')),
+    },
+    'Podcasts data': { rich_text: text(JSON.stringify(e.podcasts)) },
+  };
+}
+
+function toGoal(page) {
+  const p = page.properties;
+  return {
+    id: page.id,
+    userId: p['Member']?.relation?.[0]?.id ?? null,
+    text: readText(p['Goal']) ?? '',
+    month: readText(p['Month']),
+    done: Boolean(p['Done']?.checkbox),
+    doneAt: readDate(p['Done on']),
+    createdAt: page.created_time,
+  };
+}
+
 function readFile(prop) {
   const f = prop?.files?.[0];
   if (!f) return null;
@@ -127,9 +182,16 @@ function nextMonthStart(month) {
 }
 
 class NotionStore {
-  constructor({ token, membersId, transactionsId, settingsId, requestsId, client }) {
+  constructor({ token, membersId, transactionsId, settingsId, requestsId, scoutingId, goalsId, client }) {
     this.notion = client ?? new Client({ auth: token });
-    this.ids = { members: membersId, transactions: transactionsId, settings: settingsId, requests: requestsId };
+    this.ids = {
+      members: membersId,
+      transactions: transactionsId,
+      settings: settingsId,
+      requests: requestsId,
+      scouting: scoutingId,
+      goals: goalsId,
+    };
     this.settingsCache = null;
   }
 
@@ -344,6 +406,72 @@ class NotionStore {
 
   async deleteRequest(id) {
     await this.notion.pages.update({ page_id: id, in_trash: true });
+  }
+
+  // --- scouting log (one entry per member per day) ---
+
+  async listScouting({ userId, from, to } = {}) {
+    const filters = [];
+    if (userId) filters.push({ property: 'Member', relation: { contains: userId } });
+    if (from) filters.push({ property: 'Date', date: { on_or_after: from } });
+    if (to) filters.push({ property: 'Date', date: { on_or_before: to } });
+    const pages = await this.queryAll(this.ids.scouting, filters.length ? { filter: { and: filters } } : {});
+    return pages.map(toScouting);
+  }
+
+  async saveScouting(entry) {
+    const [existing] = await this.listScouting({ userId: entry.userId, from: entry.date, to: entry.date });
+    if (existing) {
+      await this.notion.pages.update({ page_id: existing.id, properties: scoutingProperties(entry) });
+      return { ...existing, ...entry, id: existing.id };
+    }
+    const page = await this.notion.pages.create({
+      parent: { type: 'data_source_id', data_source_id: this.ids.scouting },
+      properties: scoutingProperties(entry),
+    });
+    return toScouting(page);
+  }
+
+  // --- monthly goals ---
+
+  async listGoals({ userId, month } = {}) {
+    const filters = [];
+    if (userId) filters.push({ property: 'Member', relation: { contains: userId } });
+    if (month) filters.push({ property: 'Month', rich_text: { equals: month } });
+    const pages = await this.queryAll(this.ids.goals, filters.length ? { filter: { and: filters } } : {});
+    return pages.map(toGoal);
+  }
+
+  async getGoal(id) {
+    try {
+      const page = await this.notion.pages.retrieve({ page_id: id });
+      if (page.in_trash || page.archived) return null;
+      if (page.parent?.data_source_id && page.parent.data_source_id.replace(/-/g, '') !== this.ids.goals.replace(/-/g, '')) return null;
+      return toGoal(page);
+    } catch (err) {
+      if (err.code === 'object_not_found' || err.code === 'validation_error') return null;
+      throw err;
+    }
+  }
+
+  async createGoal({ userId, month, text: goalText }) {
+    const page = await this.notion.pages.create({
+      parent: { type: 'data_source_id', data_source_id: this.ids.goals },
+      properties: {
+        Goal: { title: text(goalText) },
+        Member: { relation: [{ id: userId }] },
+        Month: { rich_text: text(month) },
+        Done: { checkbox: false },
+      },
+    });
+    return toGoal(page);
+  }
+
+  async setGoalDone(id, done) {
+    await this.notion.pages.update({
+      page_id: id,
+      properties: { Done: { checkbox: done }, 'Done on': date(done ? new Date().toISOString().slice(0, 10) : null) },
+    });
   }
 
   // Upload a payment receipt (image or PDF) and attach it to the request.

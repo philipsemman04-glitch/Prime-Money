@@ -162,4 +162,55 @@ function memberRequestEmail({ kind, request, member, teamName, url }) {
   return { subject: copy.subject, html, text };
 }
 
-module.exports = { createNotifier, fundRequestEmail, memberRequestEmail };
+function simpleEmail({ teamName, heading, lines, button, url }) {
+  const html = shell(`
+    <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#b5821f;font-weight:700">${escapeHtml(teamName)}</div>
+    <h1 style="font-size:22px;margin:6px 0 10px;color:#0b1f4d">${escapeHtml(heading)}</h1>
+    ${lines.map((l) => `<p style="margin:0 0 8px;line-height:1.6">${l}</p>`).join('')}
+    <a href="${escapeHtml(url)}" style="display:inline-block;margin-top:16px;padding:12px 22px;border-radius:99px;background:#f2c14e;color:#0b1f4d;font-weight:700;text-decoration:none">${escapeHtml(button)}</a>`);
+  const text = [heading, ...lines.map((l) => l.replace(/<[^>]+>/g, '')), '', `${button}: ${url}`].join('\n');
+  return { html, text };
+}
+
+function scoutingReminderEmail({ member, teamName, url }) {
+  const first = String(member.displayName || '').split(' ')[0] || 'there';
+  return {
+    subject: "Reminder: log today's scouting",
+    ...simpleEmail({
+      teamName,
+      heading: "Don't forget today's scouting 📋",
+      lines: [`Hi ${escapeHtml(first)}, you haven't logged your scouting for today yet.`, 'Add your DMs, posts, engagements and any podcasts you watched — it only takes a minute.'],
+      button: 'Log my scouting',
+      url,
+    }),
+  };
+}
+
+function goalsSentEmail({ member, goals, monthLabel, teamName, url }) {
+  return {
+    subject: `${member.displayName} sent ${goals.length} goal${goals.length === 1 ? '' : 's'} for ${monthLabel}`,
+    ...simpleEmail({
+      teamName,
+      heading: `New goals from ${member.displayName}`,
+      lines: [`For <b>${escapeHtml(monthLabel)}</b>:`, `<ul style="margin:0;padding-left:18px">${goals.map((g) => `<li>${escapeHtml(g.text)}</li>`).join('')}</ul>`],
+      button: 'See team goals',
+      url,
+    }),
+  };
+}
+
+function goalCommentEmail({ member, comment, monthLabel, teamName, url }) {
+  const first = String(member.displayName || '').split(' ')[0] || 'there';
+  return {
+    subject: `Your admin commented on your ${monthLabel} goals`,
+    ...simpleEmail({
+      teamName,
+      heading: 'New comment on your goals',
+      lines: [`Hi ${escapeHtml(first)}, here's what your admin said about your goals for ${escapeHtml(monthLabel)}:`, `<i>“${escapeHtml(comment)}”</i>`],
+      button: 'Open my goals',
+      url,
+    }),
+  };
+}
+
+module.exports = { createNotifier, fundRequestEmail, memberRequestEmail, scoutingReminderEmail, goalsSentEmail, goalCommentEmail };
