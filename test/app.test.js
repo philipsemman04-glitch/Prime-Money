@@ -377,3 +377,34 @@ scenario('the admin attaches a payment receipt that the member can view', async 
   assert.equal((await rawFetch(base, ben, `/api/requests/${req.id}/receipt`)).status, 404);
   assert.ok([200, 302].includes((await rawFetch(base, admin, `/api/requests/${req.id}/receipt`)).status));
 });
+
+scenario('the admin posts announcements that every member sees', async (t, makeStore) => {
+  const { base, close } = await startServer(makeStore);
+  t.after(close);
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+  const { body: inv } = await admin('/api/admin/members', { method: 'POST', body: { displayName: 'Ada' } });
+  const ada = client(base);
+  await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123' } });
+
+  assert.deepEqual((await ada('/api/state')).body.announcements, []);
+  assert.equal((await admin('/api/admin/announcements', { method: 'POST', body: { message: '' } })).status, 400);
+  assert.equal((await admin('/api/admin/announcements', { method: 'POST', body: { message: 'x', level: 'party' } })).status, 400);
+  assert.equal((await ada('/api/admin/announcements', { method: 'POST', body: { message: 'hi' } })).status, 403);
+
+  const { body: a1 } = await admin('/api/admin/announcements', { method: 'POST', body: { message: 'Salaries go out Friday', level: 'good news' } });
+  await admin('/api/admin/announcements', { method: 'POST', body: { message: 'Submit receipts by the 5th', level: 'important' } });
+  // Team settings are unaffected by announcement rows.
+  await admin('/api/admin/allocation', { method: 'PUT', body: { business: 40, personal: 30, savings: 20, investment: 10 } });
+
+  const seen = (await ada('/api/state')).body;
+  assert.equal(seen.announcements.length, 2);
+  assert.deepEqual(seen.announcements.map((a) => a.level).sort(), ['good news', 'important']);
+  assert.equal(seen.allocation.business, 40);
+  assert.equal((await client(base)('/api/state')).body.announcements.length, 0); // not shown when signed out
+
+  assert.equal((await ada(`/api/admin/announcements/${a1.id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await admin(`/api/admin/announcements/${a1.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/api/admin/announcements/${a1.id}`, { method: 'DELETE' })).status, 404);
+  assert.deepEqual((await ada('/api/state')).body.announcements.map((a) => a.message), ['Submit receipts by the 5th']);
+});

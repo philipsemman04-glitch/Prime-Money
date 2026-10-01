@@ -221,6 +221,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     res.json({
       allocation: parseAllocation(rawAllocation),
       pots: POTS,
+      announcements: req.user ? (await store.listAnnouncements()).sort(byNewest).slice(0, 10) : [],
       pendingRequests: pending ? pending.length : undefined,
       ...(req.user?.role === 'admin'
         ? { notifyEmail: (await store.getSetting('notify_email')) || '', emailEnabled: notifier.enabled }
@@ -620,6 +621,22 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       res.json({ ok: true, receipt: { name: filename } });
     },
   );
+
+  // Announcements shown at the top of everyone's dashboard.
+  const LEVELS = ['info', 'important', 'good news'];
+  app.post('/api/admin/announcements', requireUser, requireAdmin, async (req, res) => {
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    const level = req.body?.level ?? 'info';
+    if (!message) return res.status(400).json({ error: 'Write a message first.' });
+    if (message.length > 500) return res.status(400).json({ error: 'Keep it under 500 characters.' });
+    if (!LEVELS.includes(level)) return res.status(400).json({ error: 'Pick a type for the announcement.' });
+    res.status(201).json(await store.createAnnouncement({ level, message }));
+  });
+
+  app.delete('/api/admin/announcements/:id', requireUser, requireAdmin, async (req, res) => {
+    if (!(await store.deleteAnnouncement(req.params.id))) return res.status(404).json({ error: 'Announcement not found.' });
+    res.json({ ok: true });
+  });
 
   app.put('/api/admin/notify-email', requireUser, requireAdmin, async (req, res) => {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';

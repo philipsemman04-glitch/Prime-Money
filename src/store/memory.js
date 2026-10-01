@@ -9,6 +9,21 @@ class MemoryStore {
     this.transactions = new Map();
     this.requests = new Map();
     this.receipts = new Map();
+    this.announcements = new Map();
+  }
+
+  async listAnnouncements() {
+    return [...this.announcements.values()].map((a) => ({ ...a }));
+  }
+
+  async createAnnouncement({ level, message }) {
+    const a = { id: crypto.randomUUID(), level, message, createdAt: new Date().toISOString() };
+    this.announcements.set(a.id, a);
+    return { ...a };
+  }
+
+  async deleteAnnouncement(id) {
+    return this.announcements.delete(id);
   }
 
   async getSetting(key) {

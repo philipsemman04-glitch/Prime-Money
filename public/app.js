@@ -105,6 +105,7 @@ const ICONS = {
   trash: svg('<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>', 16),
   receipt: svg('<path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 1V2l-1 1-3-2-3 2-3-2-3 2-3-2z"/><path d="M8 7h8M8 11h8M8 15h5"/>', 18),
   upload: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>', 26),
+  megaphone: svg('<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>'),
   inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>', 28),
   briefcase: svg('<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>', 18),
   heart: svg('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>', 18),
@@ -129,6 +130,54 @@ function toast(message) {
   el.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => (el.hidden = true), 2800);
+}
+
+// Announcements a member has closed are remembered on their device.
+function dismissedIds() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem('pm_dismissed') || '[]'));
+  } catch {
+    return new Set();
+  }
+}
+function dismissAnnouncement(id) {
+  const ids = dismissedIds();
+  ids.add(id);
+  try {
+    localStorage.setItem('pm_dismissed', JSON.stringify([...ids].slice(-200)));
+  } catch {}
+}
+const unseenAnnouncements = () => (state.info?.announcements || []).filter((a) => !dismissedIds().has(a.id));
+
+const LEVEL_META = {
+  info: { label: 'Announcement', cls: 'info' },
+  important: { label: 'Important', cls: 'important' },
+  'good news': { label: 'Good news', cls: 'good' },
+};
+
+function announcementsHtml() {
+  const list = unseenAnnouncements();
+  if (!list.length) return '';
+  return `<div class="announcements">${list
+    .map((a) => {
+      const meta = LEVEL_META[a.level] || LEVEL_META.info;
+      return `<div class="announce ${meta.cls}">
+        <span class="announce-ico">${ICONS.megaphone}</span>
+        <div class="announce-body"><div class="announce-top"><b>${meta.label}</b><span>${esc(formatDateTime(a.createdAt))}</span></div><p>${esc(a.message)}</p></div>
+        <button type="button" class="icon-btn flat" data-dismiss="${esc(a.id)}" title="Dismiss" aria-label="Dismiss">${ICONS.x}</button>
+      </div>`;
+    })
+    .join('')}</div>`;
+}
+
+function bindAnnouncements(rerender) {
+  app.querySelectorAll('[data-dismiss]').forEach((b) =>
+    b.addEventListener('click', () => {
+      dismissAnnouncement(b.dataset.dismiss);
+      renderShell();
+      rerender();
+    }),
+  );
 }
 
 const formData = (form) => Object.fromEntries(new FormData(form).entries());
@@ -250,7 +299,12 @@ function renderShell() {
   }
   mobileCur.innerHTML = currencySwitch();
 
-  document.getElementById('bell').innerHTML = `${ICONS.bell}${isAdmin && pending ? `<span class="badge">${pending}</span>` : ''}`;
+  // Bell: pending requests for the admin, unread announcements for members.
+  const bell = document.getElementById('bell');
+  const unread = isAdmin ? pending : unseenAnnouncements().length;
+  bell.href = isAdmin ? '#/requests' : '#/';
+  bell.setAttribute('aria-label', isAdmin ? 'Fund requests' : 'Announcements');
+  bell.innerHTML = `${ICONS.bell}${unread ? `<span class="badge">${unread}</span>` : ''}`;
   document.getElementById('avatar').innerHTML = `<span class="avatar">${esc(initials(user.displayName))}</span>`;
   document.getElementById('logout').innerHTML = ICONS.logout;
   document.title = (isAdmin && pending ? `(${pending}) ` : '') + teamName;
@@ -333,16 +387,21 @@ function route() {
 
 window.addEventListener('hashchange', route);
 
-// The admin is notified of new fund requests: badge + tab title refresh every minute.
+// Every minute: the admin's request badge and tab title refresh.
+// Members get new announcements the same way.
 setInterval(async () => {
-  if (state.info?.user?.role !== 'admin' || document.hidden) return;
+  if (!state.info?.user || document.hidden) return;
   try {
     const before = state.info.pendingRequests || 0;
+    const knownIds = new Set((state.info.announcements || []).map((a) => a.id));
     const next = await api('/api/state');
     if (!next.user) return;
     state.info = next;
+    const fresh = (next.announcements || []).filter((a) => !knownIds.has(a.id));
     if ((next.pendingRequests || 0) > before) toast('New fund request waiting for you');
+    else if (fresh.length) toast(`New announcement: ${fresh[0].message.slice(0, 80)}`);
     renderShell();
+    if (fresh.length && (location.hash || '#/') === '#/') renderDashboard();
   } catch {}
 }, 60_000);
 
@@ -726,6 +785,7 @@ async function renderDashboard() {
   renderWidget();
   const { summary, pots, transactions } = dash;
   app.innerHTML = `
+    ${announcementsHtml()}
     <div class="grid">
       <div class="s5">${potsCard(pots, { holder: u.displayName, userId: u.id, canRequest: true })}</div>
       <div class="s7">${balanceCard({
@@ -740,6 +800,7 @@ async function renderDashboard() {
       <div class="s7">${cashFlowCard(summary)}</div>
     </div>`;
   bindCommon(renderDashboard);
+  bindAnnouncements(renderDashboard);
   bindPotsCard(pots, renderDashboard);
   const add = () => openAddTransaction(renderDashboard);
   app.querySelector('#add-tx')?.addEventListener('click', add);
@@ -815,6 +876,31 @@ async function renderTeam() {
           <thead><tr><th>Member</th><th>Status</th><th class="num">Income</th><th class="num">Spent</th><th class="num">Balance</th><th>Last login</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
+      </section></div>
+      <div class="s12"><section class="card">
+        <div class="card-head"><h2>Announcements</h2><span class="sub">Shown at the top of everyone's dashboard</span></div>
+        <div class="grid" style="gap:20px">
+          <form id="announce" class="s6">
+            <label>Message <textarea name="message" rows="3" maxlength="500" required placeholder="e.g. Salaries will be paid on Friday."></textarea></label>
+            <div class="inline-form">
+              <label>Type <select name="level"><option value="info">Announcement</option><option value="important">Important</option><option value="good news">Good news</option></select></label>
+              <button class="btn navy" type="submit">${ICONS.megaphone} Post to everyone</button>
+            </div>
+            <div class="error" style="margin-top:8px"></div>
+          </form>
+          <div class="s6">
+            ${
+              state.info.announcements.length
+                ? `<div class="ann-list">${state.info.announcements
+                    .map((a) => {
+                      const meta = LEVEL_META[a.level] || LEVEL_META.info;
+                      return `<div class="ann-row"><span class="tag ${meta.cls}">${meta.label}</span><div><p>${esc(a.message)}</p><small>${esc(formatDateTime(a.createdAt))}</small></div><button type="button" class="btn soft small" data-unpost="${esc(a.id)}">Remove</button></div>`;
+                    })
+                    .join('')}</div>`
+                : `<div class="empty" style="padding:18px 0">${ICONS.megaphone.replace('width="20" height="20"', 'width="28" height="28"')}No announcements yet.</div>`
+            }
+          </div>
+        </div>
       </section></div>
       <div class="s6"><section class="card" style="height:100%">
         <div class="card-head"><h2>Invite a team member</h2></div>
@@ -894,6 +980,21 @@ async function renderTeam() {
       e.target.disabled = false;
     }
   });
+  onSubmit(app.querySelector('#announce'), async (d) => {
+    const a = await api('/api/admin/announcements', { method: 'POST', body: d });
+    state.info.announcements = [a, ...state.info.announcements];
+    toast('Announcement posted to everyone');
+    renderTeam();
+  });
+  app.querySelectorAll('[data-unpost]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      if (!confirm('Remove this announcement for everyone?')) return;
+      await api(`/api/admin/announcements/${b.dataset.unpost}`, { method: 'DELETE' });
+      state.info.announcements = state.info.announcements.filter((a) => a.id !== b.dataset.unpost);
+      toast('Announcement removed');
+      renderTeam();
+    }),
+  );
   const allocForm = app.querySelector('#alloc');
   const showSum = () => {
     const sum = state.info.pots.reduce((s, p) => s + (Number(allocForm.elements[p].value) || 0), 0);

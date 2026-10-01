@@ -152,9 +152,40 @@ class NotionStore {
   async settingsMap() {
     if (this.settingsCache && Date.now() - this.settingsCache.at < 30_000) return this.settingsCache.map;
     const pages = await this.queryAll(this.ids.settings);
-    const map = new Map(pages.map((p) => [readText(p.properties['Key']), { pageId: p.id, value: readText(p.properties['Value']) }]));
-    this.settingsCache = { at: Date.now(), map };
+    const map = new Map();
+    const announcements = [];
+    for (const p of pages) {
+      const key = readText(p.properties['Key']) ?? '';
+      const value = readText(p.properties['Value']);
+      // Announcements are Settings rows titled "announcement · <level>".
+      const m = key.match(/^announcement · (.+)$/);
+      if (m) announcements.push({ id: p.id, level: m[1], message: value ?? '', createdAt: p.created_time });
+      else map.set(key, { pageId: p.id, value });
+    }
+    this.settingsCache = { at: Date.now(), map, announcements };
     return map;
+  }
+
+  async listAnnouncements() {
+    await this.settingsMap();
+    return this.settingsCache.announcements.map((a) => ({ ...a }));
+  }
+
+  async createAnnouncement({ level, message }) {
+    const page = await this.notion.pages.create({
+      parent: { type: 'data_source_id', data_source_id: this.ids.settings },
+      properties: { Key: { title: text(`announcement · ${level}`) }, Value: { rich_text: text(message) } },
+    });
+    this.settingsCache = null;
+    return { id: page.id, level, message, createdAt: page.created_time };
+  }
+
+  async deleteAnnouncement(id) {
+    const list = await this.listAnnouncements();
+    if (!list.some((a) => a.id === id)) return false;
+    await this.notion.pages.update({ page_id: id, in_trash: true });
+    this.settingsCache = null;
+    return true;
   }
 
   async getSetting(key) {
