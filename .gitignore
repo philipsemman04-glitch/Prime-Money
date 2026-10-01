@@ -3,3 +3,6 @@ data/
 *.db
 *.db-journal
 .env
+.next
+.vercel
+.DS_Store
