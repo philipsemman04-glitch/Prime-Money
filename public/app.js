@@ -490,13 +490,14 @@ async function renderInvite(token) {
         <label>Username <input name="username" required autocomplete="username" autofocus></label>
         <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters"></label>
         <label>Confirm password <input name="confirm" type="password" required autocomplete="new-password"></label>
+        <label>Email (optional) <input name="email" type="email" autocomplete="email" placeholder="So we can tell you when requests are approved"></label>
         <div class="error"></div>
         <button class="btn block" type="submit">Open my account</button>
       </form>`,
   });
   onSubmit(app.querySelector('#f'), async (d) => {
     if (d.password !== d.confirm) throw new Error('Passwords do not match.');
-    await api(`/api/invite/${token}`, { method: 'POST', body: { username: d.username, password: d.password } });
+    await api(`/api/invite/${token}`, { method: 'POST', body: { username: d.username, password: d.password, email: d.email } });
     location.hash = '#/';
     await boot();
   });
@@ -923,6 +924,13 @@ async function renderTeam() {
       <div class="s6"><section class="card" style="height:100%">
         <div class="card-head"><h2>Email notifications</h2><span class="pill ${state.info.emailEnabled && state.info.notifyEmail ? 'active' : 'pending'}">${state.info.emailEnabled && state.info.notifyEmail ? 'On' : 'Off'}</span></div>
         ${state.info.emailEnabled ? '' : '<div class="warn" style="margin-bottom:14px">Email sending is not switched on yet — it needs <code>RESEND_API_KEY</code> in Vercel.</div>'}
+        ${
+          state.info.emailEnabled && !state.info.memberEmailsEnabled
+            ? '<div class="warn" style="margin-bottom:14px">Emails to <b>members</b> are off: the free Resend plan only delivers to your own address. Add Gmail sending (<code>GMAIL_USER</code> + <code>GMAIL_APP_PASSWORD</code>) to email members too.</div>'
+            : state.info.memberEmailsEnabled
+              ? '<div class="ok" style="margin-bottom:14px">Members with an email address get updates when you approve, pay or decline their requests.</div>'
+              : ''
+        }
         <form id="notify">
           <div class="inline-form">
             <label>Send new-request emails to <input name="email" type="email" maxlength="200" placeholder="you@example.com" value="${esc(state.info.notifyEmail || '')}"></label>
@@ -1048,6 +1056,13 @@ async function renderMemberView(id) {
           ? ''
           : `<div class="s12"><section class="card">
         <div class="card-head"><h2>Manage access</h2>${statusPill(m.status)}</div>
+        <form id="member-email" style="margin-bottom:18px">
+          <div class="inline-form">
+            <label>Email for request updates <input name="email" type="email" maxlength="200" placeholder="Not set" value="${esc(m.email || '')}"></label>
+            <button class="btn soft" type="submit">Save email</button>
+          </div>
+          <div class="error" style="margin-top:8px"></div>
+        </form>
         <p class="muted" style="margin-top:0;font-size:14px">Forgot their password? Reset it to get a new invite link — they choose a new username and password. Their money data is kept.</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn soft" id="reset">Reset login</button><button class="btn danger" id="toggle">${m.status === 'deactivated' ? 'Reactivate' : 'Deactivate'}</button></div>
       </section></div>`
@@ -1057,6 +1072,10 @@ async function renderMemberView(id) {
   bindCommon(rerender);
   bindPotsCard(pots, rerender);
   if (isSelf) return;
+  onSubmit(app.querySelector('#member-email'), async (d) => {
+    const { email } = await api(`/api/admin/members/${id}/email`, { method: 'PUT', body: { email: d.email } });
+    toast(email ? `Email saved for ${m.displayName}` : 'Email removed');
+  });
   app.querySelector('#reset').addEventListener('click', async () => {
     if (!confirm(`Reset ${m.displayName}'s login? Their current password stops working.`)) return;
     const { inviteToken } = await api(`/api/admin/members/${id}/reset`, { method: 'POST' });
@@ -1212,7 +1231,11 @@ function requestCard(r, { admin }) {
 async function renderMyRequests() {
   setTitle('Requests', 'Your fund requests and their status');
   const list = await api('/api/me/requests');
+  const nudge = state.info.user.email
+    ? ''
+    : `<a class="banner" href="#/account">${ICONS.bell}<span><b>Get an email</b> when your requests are approved or paid — add your email address</span><span class="go btn small">Add email</span></a>`;
   app.innerHTML = `
+    ${nudge}
     <div class="mobile-only" style="justify-content:flex-end"><a class="btn" href="#/requests/new">${ICONS.send} Request funds</a></div>
     ${list.length ? `<div class="req-list">${list.map((r) => requestCard(r, { admin: false })).join('')}</div>` : `<section class="card empty">${ICONS.inbox}You haven't requested any funds yet.</section>`}`;
   app.querySelectorAll('[data-cancel]').forEach((b) =>
@@ -1337,7 +1360,7 @@ async function renderReviewRequests(filter = state.requestFilter || 'pending') {
       onSubmit(el.querySelector('#approve'), async (d) => {
         const file = getFile();
         const prepared = file ? await prepareReceipt(file) : null; // validate before approving
-        await api(`/api/admin/requests/${r.id}/decision`, { method: 'POST', body: { decision: 'approve', note: d.note } });
+        await api(`/api/admin/requests/${r.id}/decision`, { method: 'POST', body: { decision: 'approve', note: d.note, receiptFollows: Boolean(prepared) } });
         if (prepared) {
           try {
             await uploadReceipt(r.id, prepared);
@@ -1413,6 +1436,17 @@ function renderAccount() {
         </div>
         <p class="muted" style="margin:0;font-size:14px">Your money data is private to you — only the team admin can view it.</p>
       </section></div>
+      <div class="s12"><section class="card">
+        <div class="card-head"><h2>Email notifications</h2><span class="pill ${u.email ? 'active' : 'pending'}">${u.email ? 'On' : 'Off'}</span></div>
+        <p class="muted" style="margin:-6px 0 14px;font-size:14px">We'll email you when your fund requests are approved, paid or declined.</p>
+        <form id="email-form">
+          <div class="inline-form">
+            <label>Your email <input name="email" type="email" autocomplete="email" maxlength="200" placeholder="you@example.com" value="${esc(u.email || '')}"></label>
+            <button class="btn" type="submit">Save email</button>
+          </div>
+          <div class="error" style="margin-top:8px"></div>
+        </form>
+      </section></div>
       <div class="s7"><section class="card">
         <div class="card-head"><h2>Change password</h2></div>
         <form id="f">
@@ -1426,6 +1460,12 @@ function renderAccount() {
         </form>
       </section></div>
     </div>`;
+  onSubmit(app.querySelector('#email-form'), async (d) => {
+    const { email } = await api('/api/me/email', { method: 'PUT', body: { email: d.email } });
+    state.info.user.email = email;
+    toast(email ? 'Email saved — you will get request updates' : 'Email removed');
+    renderAccount();
+  });
   onSubmit(app.querySelector('#f'), async (d) => {
     if (d.newPassword !== d.confirm) throw new Error('Passwords do not match.');
     await api('/api/me/password', { method: 'POST', body: d });

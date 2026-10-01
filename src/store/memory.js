@@ -67,6 +67,7 @@ class MemoryStore {
       lockedUntil: null,
       joinedAt: null,
       lastLoginAt: null,
+      email: null,
       ...user,
     };
     this.users.set(u.id, u);

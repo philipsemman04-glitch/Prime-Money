@@ -2,7 +2,7 @@ const path = require('node:path');
 const express = require('express');
 const auth = require('./auth');
 const { getNgnRate } = require('./rates');
-const { createNotifier, fundRequestEmail } = require('./notify');
+const { createNotifier, fundRequestEmail, memberRequestEmail } = require('./notify');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -84,7 +84,17 @@ function shiftMonth(month, delta) {
 }
 
 function publicUser(u) {
-  return { id: u.id, displayName: u.displayName, username: u.username, role: u.role };
+  return { id: u.id, displayName: u.displayName, username: u.username, role: u.role, email: u.email ?? null };
+}
+
+// Empty string clears; otherwise must look like an email address.
+function cleanEmail(value) {
+  if (value === null || value === undefined || value === '') return { email: null };
+  if (typeof value !== 'string') return { error: 'Enter a valid email address.' };
+  const email = value.trim().toLowerCase();
+  if (!email) return { email: null };
+  if (email.length > 200 || !EMAIL_RE.test(email)) return { error: 'Enter a valid email address.' };
+  return { email };
 }
 
 const signed = (t) => (t.type === 'income' ? t.amountCents : -t.amountCents);
@@ -166,6 +176,19 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     res.setHeader('Set-Cookie', auth.sessionCookie(token, { secure: secureCookies, maxAgeMs: auth.SESSION_TTL_MS }));
   }
 
+  // Tell a member about their request. Never fails the caller.
+  async function emailMember(req, request, kind) {
+    try {
+      const member = await store.getUser(request.userId);
+      if (!member?.email || !notifier.enabled) return;
+      const teamName = (await store.getSetting('team_name')) || 'Team Prime';
+      const url = `${req.protocol}://${req.get('host')}/#/requests`;
+      await notifier.send({ to: member.email, ...memberRequestEmail({ kind, request, member, teamName, url }) });
+    } catch (err) {
+      console.error(`Member ${kind} email failed:`, err.message);
+    }
+  }
+
   // --- middleware -------------------------------------------------------
 
   app.disable('x-powered-by');
@@ -224,7 +247,11 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       announcements: req.user ? (await store.listAnnouncements()).sort(byNewest).slice(0, 10) : [],
       pendingRequests: pending ? pending.length : undefined,
       ...(req.user?.role === 'admin'
-        ? { notifyEmail: (await store.getSetting('notify_email')) || '', emailEnabled: notifier.enabled }
+        ? {
+            notifyEmail: (await store.getSetting('notify_email')) || '',
+            emailEnabled: notifier.enabled,
+            memberEmailsEnabled: notifier.enabled && Boolean(notifier.canEmailAnyone),
+          }
         : {}),
       setupNeeded: !hasAdmin,
       teamName: teamName || 'Team Prime',
@@ -308,8 +335,11 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     if (err) return res.status(400).json({ error: err });
     const taken = await store.findUserByUsername(username);
     if (taken && taken.id !== user.id) return res.status(409).json({ error: 'That username is taken.' });
+    const emailCheck = cleanEmail(req.body?.email);
+    if (emailCheck.error) return res.status(400).json({ error: emailCheck.error });
 
     const patch = {
+      ...(emailCheck.email ? { email: emailCheck.email } : {}),
       username: username.toLowerCase(),
       passwordHash: auth.hashPassword(password),
       inviteToken: null,
@@ -374,6 +404,13 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     }
     await store.deleteTransaction(tx.id);
     res.json({ ok: true });
+  });
+
+  app.put('/api/me/email', requireUser, async (req, res) => {
+    const { email, error } = cleanEmail(req.body?.email);
+    if (error) return res.status(400).json({ error });
+    await store.updateUser(req.user.id, { email });
+    res.json({ email });
   });
 
   app.post('/api/me/password', requireUser, async (req, res) => {
@@ -562,7 +599,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
   });
 
   app.post('/api/admin/requests/:id/decision', requireUser, requireAdmin, async (req, res) => {
-    const { decision, note = '' } = req.body ?? {};
+    const { decision, note = '', receiptFollows = false } = req.body ?? {};
     if (decision !== 'approve' && decision !== 'decline') return res.status(400).json({ error: 'Choose approve or decline.' });
     if (typeof note !== 'string' || note.length > 300) return res.status(400).json({ error: 'Note is too long.' });
     const request = await store.getRequest(req.params.id);
@@ -572,6 +609,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const decidedAt = new Date().toISOString();
     if (decision === 'decline') {
       await store.updateRequest(request.id, { status: 'declined', adminNote: note.trim(), decidedAt });
+      await emailMember(req, { ...request, adminNote: note.trim() }, 'declined');
       return res.json({ ok: true, status: 'declined' });
     }
 
@@ -595,6 +633,8 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       decidedAt,
       transactionId: tx.id,
     });
+    // When a receipt is about to be uploaded, the "paid" email goes out with it instead.
+    if (!receiptFollows) await emailMember(req, { ...request, adminNote: note.trim() }, 'approved');
     res.json({ ok: true, status: 'approved' });
   });
 
@@ -618,6 +658,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       } catch {}
       const filename = name.replace(/\.[a-z0-9]+$/i, '') + '.' + RECEIPT_TYPES[contentType];
       await store.attachReceipt(request.id, { filename, contentType, data: req.body });
+      await emailMember(req, request, 'paid');
       res.json({ ok: true, receipt: { name: filename } });
     },
   );
@@ -727,6 +768,13 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const status = req.body.active ? (req.member.passwordHash ? 'active' : 'invited') : 'deactivated';
     await store.updateUser(req.member.id, { status, sessionVersion: (req.member.sessionVersion ?? 0) + 1 });
     res.json({ ok: true });
+  });
+
+  app.put('/api/admin/members/:id/email', requireUser, requireAdmin, loadMember, async (req, res) => {
+    const { email, error } = cleanEmail(req.body?.email);
+    if (error) return res.status(400).json({ error });
+    await store.updateUser(req.member.id, { email });
+    res.json({ email });
   });
 
   app.get('/api/admin/members/:id/dashboard', requireUser, requireAdmin, loadMember, async (req, res) => {

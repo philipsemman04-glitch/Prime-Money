@@ -8,6 +8,7 @@ A private money-management platform for a team.
 - **Pots**: every income is split into Business 30%, Personal 30%, Savings 20% and Investment 20% (the admin can change the split on the Team page). Expenses come out of a pot (Personal by default).
 - **Fund requests**: a member picks a pot, lists what they need with prices, and gives the bank account to pay into. The admin sees a badge on **Requests** (and in the browser tab), and can get an email for each new request (set the address on the Team page), then approves or declines with an optional note. Approving records the payout as an expense from that pot. The admin sends the money and attaches the transfer receipt (screenshot or PDF) when approving or later; the member can open it from their request.
 - **Announcements**: the admin posts messages (Announcement, Important or Good news) from the Team page. They appear at the top of everyone's dashboard, members see a count on the bell, and each person can close them. They are stored as rows in the Notion Settings table titled `announcement · <type>`.
+- **Member emails**: members add an email on sign-up or on their Account page (the admin can set it too). They are emailed when a request is approved, paid (receipt attached) or declined.
 - **Dollars and naira**: all amounts are kept in US dollars. The **$ USD / ₦ NGN** switch shows everything in naira, and members can type entries in either currency. The rate is the live market rate, or a fixed rate the admin sets on the Team page.
 
 ## Where the data lives
@@ -16,7 +17,7 @@ All data is stored in Notion, under the private page **Prime Money — App Datab
 
 | Table            | What's in it                                                                 |
 | ---------------- | ---------------------------------------------------------------------------- |
-| **Members**      | One row per person: name, username, role, status, scrambled password, etc.   |
+| **Members**      | One row per person: name, username, email, role, status, scrambled password  |
 | **Transactions** | Every entry: member, type, amount in USD, original amount/currency, category |
 | **Settings**     | Team name and the exchange rate                                              |
 | **Fund Requests**| Each request: member, pot, items, total, bank details, status, note, receipt |
@@ -32,7 +33,11 @@ The website runs on Vercel and deploys automatically from the `main` branch. It 
 | `NOTION_TOKEN`   | The Internal Integration Secret of the "Prime Money" Notion integration (starts `ntn_`) |
 | `SESSION_SECRET` | A long random string used to sign login cookies                                         |
 | `RESEND_API_KEY` | Optional. API key from resend.com, used to email the admin about new fund requests      |
-| `EMAIL_FROM`     | Optional. Sender address; defaults to `Team Prime <onboarding@resend.dev>`              |
+| `GMAIL_USER`     | Optional. Gmail address to send all emails from (can email any member)                  |
+| `GMAIL_APP_PASSWORD` | Optional. A Google "app password" for that Gmail account (16 letters)               |
+| `EMAIL_FROM`     | Optional. Sender name/address override                                                   |
+
+Email: with Gmail set, emails go to the admin and to members. With only Resend (no verified domain), emails only reach the address that owns the Resend account, so members get none.
 
 The Notion integration must be connected to the **Prime Money — App Database** page (page menu **•••** → **Connections** → add "Prime Money").
 

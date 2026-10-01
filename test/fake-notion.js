@@ -7,7 +7,7 @@ const SCHEMAS = {
   members: {
     Name: 'title', Username: 'rich_text', Role: 'select', Status: 'select', 'Password hash': 'rich_text',
     'Invite token': 'rich_text', 'Session version': 'number', 'Failed logins': 'number',
-    'Locked until': 'date', Joined: 'date', 'Last login': 'date',
+    'Locked until': 'date', Joined: 'date', 'Last login': 'date', Email: 'email',
   },
   transactions: {
     Entry: 'title', Member: 'relation', Type: 'select', 'Amount (USD)': 'number', 'Original amount': 'number',

@@ -37,7 +37,12 @@ if (!sessionSecret) {
 
 const app = express();
 if (onVercel || env.TRUST_PROXY) app.set('trust proxy', env.TRUST_PROXY || 1);
-const notifier = createNotifier({ apiKey: env.RESEND_API_KEY, ...(env.EMAIL_FROM ? { from: env.EMAIL_FROM } : {}) });
+const notifier = createNotifier({
+  apiKey: env.RESEND_API_KEY,
+  gmailUser: env.GMAIL_USER,
+  gmailPassword: env.GMAIL_APP_PASSWORD,
+  from: env.EMAIL_FROM,
+});
 app.use(createApp(store, { sessionSecret, secureCookies: onVercel || env.SECURE_COOKIES === 'true', notifier }));
 
 module.exports = app;

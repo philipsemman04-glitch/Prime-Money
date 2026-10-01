@@ -1,10 +1,33 @@
-// Email notifications through Resend (https://resend.com). Without an API key
-// the notifier is disabled and every send is skipped.
+// Email notifications. Two ways to send:
+// - Gmail (GMAIL_USER + GMAIL_APP_PASSWORD): can email anyone, no domain needed.
+// - Resend (RESEND_API_KEY): without a verified domain it only delivers to the
+//   address that owns the Resend account.
+// With neither configured, every send is skipped.
 const RESEND_URL = 'https://api.resend.com/emails';
 
-function createNotifier({ apiKey, from = 'Team Prime <onboarding@resend.dev>', fetchImpl = fetch } = {}) {
+function createNotifier({ apiKey, gmailUser, gmailPassword, from, fetchImpl = fetch, transport } = {}) {
+  if (gmailUser && gmailPassword) {
+    const mailer =
+      transport ??
+      require('nodemailer').createTransport({
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true,
+        auth: { user: gmailUser, pass: gmailPassword.replace(/\s+/g, '') },
+      });
+    return {
+      enabled: true,
+      canEmailAnyone: true,
+      async send({ to, subject, html, text }) {
+        await mailer.sendMail({ from: from || `Team Prime <${gmailUser}>`, to, subject, html, text });
+        return { sent: true };
+      },
+    };
+  }
+  from = from || 'Team Prime <onboarding@resend.dev>';
   return {
     enabled: Boolean(apiKey),
+    canEmailAnyone: false,
     async send({ to, subject, html, text }) {
       if (!apiKey) return { skipped: true };
       const res = await fetchImpl(RESEND_URL, {
@@ -86,4 +109,57 @@ function fundRequestEmail({ request, member, teamName, reviewUrl }) {
   return { subject, html, text };
 }
 
-module.exports = { createNotifier, fundRequestEmail };
+const shell = (inner) => `
+  <div style="background:#eef1f6;padding:32px 16px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#0b1630">
+    <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:18px;padding:28px;border-top:4px solid #f2c14e">${inner}</div>
+  </div>`;
+
+// Emails a member gets about their own request.
+function memberRequestEmail({ kind, request, member, teamName, url }) {
+  const cur = request.origCurrency;
+  const total = formatMoney(request.origAmountCents, cur);
+  const pot = POT_LABELS[request.pot] ?? request.pot;
+  const first = String(member.displayName || '').split(' ')[0] || 'there';
+  const copy = {
+    approved: {
+      subject: `Approved: your request for ${total}`,
+      heading: 'Your request was approved ✅',
+      line: `Good news, ${escapeHtml(first)} — your request for <b>${total}</b> from your ${escapeHtml(pot)} pot has been approved. The money will be sent to ${escapeHtml(request.bankName)} ${escapeHtml(request.accountNumber)}.`,
+      color: '#0f9d58',
+    },
+    paid: {
+      subject: `Paid: ${total} has been sent to you`,
+      heading: 'Payment sent 💸',
+      line: `Hi ${escapeHtml(first)}, your request for <b>${total}</b> has been approved and paid to ${escapeHtml(request.bankName)} ${escapeHtml(request.accountNumber)}. The transfer receipt is attached to your request in the app.`,
+      color: '#0f9d58',
+    },
+    declined: {
+      subject: `Declined: your request for ${total}`,
+      heading: 'Your request was declined',
+      line: `Hi ${escapeHtml(first)}, your request for <b>${total}</b> from your ${escapeHtml(pot)} pot was declined.`,
+      color: '#e5484d',
+    },
+  }[kind];
+
+  const items = request.items.map((i) => `<li>${escapeHtml(i.name)} — ${formatMoney(i.price, cur)}</li>`).join('');
+  const note = request.adminNote ? `<p style="margin:16px 0 0;padding:12px 14px;border-radius:10px;background:#f4f6fa"><b>Note from your admin:</b> ${escapeHtml(request.adminNote)}</p>` : '';
+  const html = shell(`
+    <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#b5821f;font-weight:700">${escapeHtml(teamName)}</div>
+    <h1 style="font-size:22px;margin:6px 0 10px;color:${copy.color}">${copy.heading}</h1>
+    <p style="margin:0;line-height:1.6">${copy.line}</p>
+    <ul style="margin:14px 0 0;padding-left:18px;color:#667089;line-height:1.7">${items}</ul>
+    ${note}
+    <a href="${escapeHtml(url)}" style="display:inline-block;margin-top:22px;padding:12px 22px;border-radius:99px;background:#f2c14e;color:#0b1f4d;font-weight:700;text-decoration:none">Open my requests</a>`);
+  const text = [
+    copy.heading,
+    copy.line.replace(/<[^>]+>/g, ''),
+    '',
+    ...request.items.map((i) => `- ${i.name}: ${formatMoney(i.price, cur)}`),
+    request.adminNote ? `\nNote from your admin: ${request.adminNote}` : '',
+    '',
+    `Open the app: ${url}`,
+  ].join('\n');
+  return { subject: copy.subject, html, text };
+}
+
+module.exports = { createNotifier, fundRequestEmail, memberRequestEmail };

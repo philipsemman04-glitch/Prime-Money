@@ -25,3 +25,14 @@ test('notifier posts to Resend with the API key, and is disabled without one', a
   assert.deepEqual(await off.send({ to: 'a@b.co', subject: 's' }), { skipped: true });
   assert.equal(calls.length, 1);
 });
+
+test('Gmail transport sends to any address with the Gmail account as sender', async () => {
+  const mails = [];
+  const n = createNotifier({ gmailUser: 'team@gmail.com', gmailPassword: 'abcd efgh ijkl mnop', transport: { sendMail: async (m) => mails.push(m) } });
+  assert.equal(n.enabled, true);
+  assert.equal(n.canEmailAnyone, true);
+  await n.send({ to: 'member@example.com', subject: 'Hi', text: 't' });
+  assert.equal(mails[0].from, 'Team Prime <team@gmail.com>');
+  assert.equal(mails[0].to, 'member@example.com');
+  assert.equal(createNotifier({ apiKey: 're_x' }).canEmailAnyone, false);
+});

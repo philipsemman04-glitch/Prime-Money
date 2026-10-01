@@ -408,3 +408,65 @@ scenario('the admin posts announcements that every member sees', async (t, makeS
   assert.equal((await admin(`/api/admin/announcements/${a1.id}`, { method: 'DELETE' })).status, 404);
   assert.deepEqual((await ada('/api/state')).body.announcements.map((a) => a.message), ['Submit receipts by the 5th']);
 });
+
+scenario('members get emails when their request is approved, paid or declined', async (t, makeStore) => {
+  const sent = [];
+  const notifier = { enabled: true, canEmailAnyone: true, async send(msg) { sent.push(msg); return { sent: true }; } };
+  const { base, close } = await startServer(makeStore, { notifier });
+  t.after(close);
+  const admin = client(base);
+  await admin('/api/setup', { method: 'POST', body: { teamName: 'Team Prime', displayName: 'Boss', username: 'boss', password: 'supersecret' } });
+  const { body: inv } = await admin('/api/admin/members', { method: 'POST', body: { displayName: 'Ada Obi' } });
+  const ada = client(base);
+
+  // Email can be given when signing up; bad addresses are refused.
+  assert.equal((await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123', email: 'nope' } })).status, 400);
+  assert.equal((await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123', email: 'Ada@Example.com' } })).status, 201);
+  assert.equal((await ada('/api/state')).body.user.email, 'ada@example.com');
+  assert.equal((await admin('/api/state')).body.memberEmailsEnabled, true);
+
+  const ask = (name) =>
+    ada('/api/me/requests', { method: 'POST', body: { pot: 'business', items: [{ name, price: 100 }], bankName: 'GTBank', accountNumber: '0123456789', accountName: 'Ada Obi' } });
+
+  // Approve without a receipt -> "approved" email with the admin's note.
+  let { body: r } = await ask('Laptop');
+  sent.length = 0;
+  await admin(`/api/admin/requests/${r.id}/decision`, { method: 'POST', body: { decision: 'approve', note: 'Sending today' } });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'ada@example.com');
+  assert.match(sent[0].subject, /^Approved: your request for \$100\.00/);
+  assert.match(sent[0].html, /Sending today/);
+
+  // Attaching the receipt later -> "paid" email.
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  await rawFetch(base, admin, `/api/admin/requests/${r.id}/receipt`, { method: 'POST', body: png, headers: { 'Content-Type': 'image/png' } });
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].subject, /^Paid:/);
+
+  // Approve with a receipt in one go -> only the "paid" email.
+  ({ body: r } = await ask('Chair'));
+  sent.length = 0;
+  await admin(`/api/admin/requests/${r.id}/decision`, { method: 'POST', body: { decision: 'approve', receiptFollows: true } });
+  assert.equal(sent.length, 0);
+  await rawFetch(base, admin, `/api/admin/requests/${r.id}/receipt`, { method: 'POST', body: png, headers: { 'Content-Type': 'image/png' } });
+  assert.deepEqual(sent.map((m) => m.subject.split(':')[0]), ['Paid']);
+
+  // Decline -> "declined" email with the reason.
+  ({ body: r } = await ask('Phone'));
+  sent.length = 0;
+  await admin(`/api/admin/requests/${r.id}/decision`, { method: 'POST', body: { decision: 'decline', note: 'Not this month' } });
+  assert.match(sent[0].subject, /^Declined:/);
+  assert.match(sent[0].text, /Not this month/);
+
+  // Members can change or clear their email; the admin can set it too.
+  assert.equal((await ada('/api/me/email', { method: 'PUT', body: { email: 'bad' } })).status, 400);
+  await ada('/api/me/email', { method: 'PUT', body: { email: '' } });
+  ({ body: r } = await ask('Desk'));
+  sent.length = 0;
+  await admin(`/api/admin/requests/${r.id}/decision`, { method: 'POST', body: { decision: 'decline' } });
+  assert.equal(sent.length, 0); // no address, no email
+  const adaId = (await ada('/api/state')).body.user.id;
+  assert.equal((await ada(`/api/admin/members/${adaId}/email`, { method: 'PUT', body: { email: 'x@y.co' } })).status, 403);
+  await admin(`/api/admin/members/${adaId}/email`, { method: 'PUT', body: { email: 'ada.obi@example.com' } });
+  assert.equal((await admin(`/api/admin/members/${adaId}/dashboard`)).body.member.email, 'ada.obi@example.com');
+});

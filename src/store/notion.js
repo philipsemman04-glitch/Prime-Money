@@ -25,6 +25,7 @@ function toUser(page) {
     lockedUntil: readDate(p['Locked until']),
     joinedAt: readDate(p['Joined']),
     lastLoginAt: readDate(p['Last login']),
+    email: p['Email']?.email ?? null,
   };
 }
 
@@ -42,6 +43,7 @@ function userProperties(u) {
   if ('lockedUntil' in u) props['Locked until'] = date(u.lockedUntil);
   if ('joinedAt' in u) props['Joined'] = date(u.joinedAt);
   if ('lastLoginAt' in u) props['Last login'] = date(u.lastLoginAt);
+  if ('email' in u) props['Email'] = { email: u.email || null };
   return props;
 }
 
