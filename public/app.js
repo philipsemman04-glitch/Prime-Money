@@ -582,33 +582,6 @@ function latestRequestCard(r, { canRequest }) {
     </section>`;
 }
 
-function scoreCard(summary) {
-  const rate = summary.income > 0 ? (summary.net / summary.income) * 100 : 0;
-  const tiers = [
-    [50, 'PLATINUM', '#1f4fd1'],
-    [25, 'GOLD', '#d9a336'],
-    [10, 'SILVER', '#8a94a6'],
-    [0, 'BRONZE', '#c07a43'],
-  ];
-  const [, tier, color] = summary.income === 0 ? [0, 'NO INCOME YET', '#9aa3b6'] : rate < 0 ? [0, 'OVERSPENT', '#e5484d'] : tiers.find(([min]) => rate >= min);
-  const shown = Math.max(0, Math.round(rate));
-  const r = 70;
-  const c = 2 * Math.PI * r;
-  const filled = (Math.min(100, shown) / 100) * c;
-  return `
-    <section class="card">
-      <div class="card-head"><h2>Saving score</h2><span class="sub">${esc(monthLabel(state.month, true))}</span></div>
-      <div class="ring-wrap"><div class="ring">
-        <svg viewBox="0 0 170 170" width="170" height="170">
-          <circle cx="85" cy="85" r="${r}" fill="none" stroke="${color}22" stroke-width="14"/>
-          <circle cx="85" cy="85" r="${r}" fill="none" stroke="${color}" stroke-width="14" stroke-linecap="round" stroke-dasharray="${filled} ${c}"/>
-        </svg>
-        <div class="center"><b>${shown}%</b><span style="color:${color}">${tier}</span></div>
-      </div></div>
-      <p class="ring-note">${summary.income > 0 ? `You kept ${shown}% of what came in this month.` : 'Add income to see how much you keep.'}</p>
-    </section>`;
-}
-
 function transactionsCard(txs, { editable, expanded }) {
   const list = expanded ? txs : txs.slice(0, 6);
   const rows = list.length
@@ -754,18 +727,17 @@ async function renderDashboard() {
   const { summary, pots, transactions } = dash;
   app.innerHTML = `
     <div class="grid">
+      <div class="s5">${potsCard(pots, { holder: u.displayName, userId: u.id, canRequest: true })}</div>
       <div class="s7">${balanceCard({
         title: 'My account',
         balance: summary.balance,
         summary,
         actions: `<div class="btn-stack"><button type="button" class="btn block" id="add-tx-2">${ICONS.plus} Add transaction</button><a class="btn soft block" href="#/requests/new">Request funds</a></div>`,
       })}</div>
-      <div class="s5">${potsCard(pots, { holder: u.displayName, userId: u.id, canRequest: true })}</div>
-      <div class="s7">${latestRequestCard(requests[0], { canRequest: true })}</div>
-      <div class="s5">${scoreCard(summary)}</div>
       <div class="s7">${transactionsCard(transactions, { editable: true, expanded: state.expanded })}</div>
+      <div class="s5">${latestRequestCard(requests[0], { canRequest: true })}</div>
       <div class="s5">${categoriesCard(summary)}</div>
-      <div class="s12">${cashFlowCard(summary)}</div>
+      <div class="s7">${cashFlowCard(summary)}</div>
     </div>`;
   bindCommon(renderDashboard);
   bindPotsCard(pots, renderDashboard);
@@ -966,8 +938,8 @@ async function renderMemberView(id) {
   app.innerHTML = `
     <a class="link-btn" href="#/team">${ICONS.left} Back to team</a>
     <div class="grid">
-      <div class="s7">${balanceCard({ title: `${m.displayName.split(' ')[0]}'s account`, balance: summary.balance, summary })}</div>
       <div class="s5">${potsCard(pots, { holder: m.displayName, userId: m.id, canRequest: false })}</div>
+      <div class="s7">${balanceCard({ title: `${m.displayName.split(' ')[0]}'s account`, balance: summary.balance, summary })}</div>
       <div class="s7">${transactionsCard(transactions, { editable: false, expanded: state.expanded })}</div>
       <div class="s5">${categoriesCard(summary)}</div>
       ${
