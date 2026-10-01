@@ -438,6 +438,20 @@ textarea { resize: vertical; min-height: 80px; }
 .min-bar small { display: block; margin-top: 6px; font-size: 12px; font-weight: 700; color: #8a6212; }
 .min-bar.met .min-track span { background: var(--income); }
 .min-bar.met small { color: var(--income); }
+.ds-row { display: grid; grid-template-columns: 38px 1fr; gap: 12px; align-items: center; margin-bottom: 14px; }
+.ds-ico { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; }
+.ds-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-size: 14px; font-weight: 600; }
+.ds-top b { font-size: 16px; font-weight: 800; }
+.ds-top small { color: var(--muted); font-weight: 600; font-size: 12px; }
+.ds-foot { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0 16px; font-size: 13px; color: var(--muted); }
+.ds-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.ds-foot svg { width: 14px; height: 14px; }
+.ds-foot b { color: var(--text); }
+.ds-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.ds-summary > div { padding: 12px 14px; border-radius: 14px; background: var(--surface-2); }
+.ds-summary b { display: block; font-size: 26px; font-weight: 800; color: var(--navy); }
+.ds-summary b.pos { color: var(--income); }
+.ds-summary small { color: var(--muted); font-weight: 600; font-size: 12px; }
 .team-goals { display: grid; gap: 14px; }
 .tg-row { display: grid; grid-template-columns: 36px 1fr; gap: 12px; align-items: center; }
 .tg-name { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }

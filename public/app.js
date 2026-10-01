@@ -791,15 +791,17 @@ async function renderDashboard() {
   const u = state.info.user;
   setTitle('Dashboard', `${greeting()}, ${u.displayName.split(' ')[0]}`);
   const isAdmin = u.role === 'admin';
-  const [dash, requests, goals] = await Promise.all([
+  const [dash, requests, goals, scouting] = await Promise.all([
     api(`/api/me/dashboard?month=${state.month}`),
     api('/api/me/requests'),
     api(isAdmin ? `/api/admin/goals?month=${state.month}` : `/api/me/goals?month=${state.month}`).catch(() => null),
+    api(isAdmin ? '/api/admin/scouting' : '/api/me/scouting').catch(() => null),
   ]);
   state.dash = dash;
   renderWidget();
   const { summary, pots, transactions } = dash;
   const goalsCard = !goals ? '' : isAdmin ? teamGoalsCard(goals) : myGoalsCard(goals);
+  const scoutCard = !scouting ? '' : isAdmin ? teamScoutingCard(scouting) : myScoutingCard(scouting);
   app.innerHTML = `
     ${announcementsHtml()}
     <div class="grid">
@@ -810,11 +812,12 @@ async function renderDashboard() {
         summary,
         actions: `<div class="btn-stack"><button type="button" class="btn block" id="add-tx-2">${ICONS.plus} Add transaction</button><a class="btn soft block" href="#/requests/new">Request funds</a></div>`,
       })}</div>
+      <div class="s5">${scoutCard}</div>
+      <div class="s7">${goalsCard}</div>
       <div class="s7">${transactionsCard(transactions, { editable: true, expanded: state.expanded })}</div>
-      <div class="s5">${goalsCard}</div>
       <div class="s5">${latestRequestCard(requests[0], { canRequest: true })}</div>
-      <div class="s7">${categoriesCard(summary)}</div>
-      <div class="s12">${cashFlowCard(summary)}</div>
+      <div class="s5">${categoriesCard(summary)}</div>
+      <div class="s7">${cashFlowCard(summary)}</div>
     </div>`;
   bindCommon(renderDashboard);
   bindAnnouncements(renderDashboard);
@@ -1512,14 +1515,15 @@ async function renderMyScouting(day) {
           </div>
         </div>
         <p class="muted" style="margin:-8px 0 12px;font-size:13px">${esc(prettyDay(day, { weekday: 'long', day: 'numeric', month: 'long' }))}${data.entries.some((e) => e.date === day) ? ' · saved — you can update it' : ''}</p>
-        <div class="min-note">${ICONS.target} Daily minimum: <b>${data.minimum.dms} scouting DMs</b> and <b>${data.minimum.posts} posts</b></div>
+        <div class="min-note">${ICONS.target} Daily minimum: <b>${data.minimum.dms} scouting DMs</b>, <b>${data.minimum.posts} posts</b> and <b>${data.minimum.engagements} engagements</b></div>
         <form id="scout">
           <div class="num-row">
             <label><span class="num-ico dm">${ICONS.dm}</span>Scouting DMs sent<input name="dms" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.dms)}">
               <span class="min-bar" data-min="dms"><span class="min-track"><span></span></span><small></small></span></label>
             <label><span class="num-ico post">${ICONS.post}</span>Posts posted<input name="posts" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.posts)}">
               <span class="min-bar" data-min="posts"><span class="min-track"><span></span></span><small></small></span></label>
-            <label><span class="num-ico eng">${ICONS.heartSm}</span>Engagements<input name="engagements" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.engagements)}"></label>
+            <label><span class="num-ico eng">${ICONS.heartSm}</span>Engagements<input name="engagements" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.engagements)}">
+              <span class="min-bar" data-min="engagements"><span class="min-track"><span></span></span><small></small></span></label>
           </div>
           <div class="card-head" style="margin:8px 0 12px"><h2 style="font-size:15px">${ICONS.mic} Podcasts watched</h2></div>
           <div id="pods"></div>
@@ -1535,7 +1539,7 @@ async function renderMyScouting(day) {
   // Live progress towards the daily minimum.
   const form = app.querySelector('#scout');
   const updateMins = () => {
-    for (const key of ['dms', 'posts']) {
+    for (const key of ['dms', 'posts', 'engagements']) {
       const val = Number(form.elements[key].value) || 0;
       const min = data.minimum[key];
       const bar = form.querySelector(`[data-min="${key}"]`);
@@ -1571,8 +1575,8 @@ async function renderMyScouting(day) {
       lesson: r.querySelector('.p-lesson').value,
     }));
     await api(`/api/me/scouting/${day}`, { method: 'PUT', body: { dms: d.dms, posts: d.posts, engagements: d.engagements, podcasts } });
-    const met = Number(d.dms) >= data.minimum.dms && Number(d.posts) >= data.minimum.posts;
-    toast(met ? 'Scouting saved — minimum met 💪' : `Saved — still below the minimum of ${data.minimum.dms} DMs and ${data.minimum.posts} posts`);
+    const met = ['dms', 'posts', 'engagements'].every((k) => Number(d[k]) >= data.minimum[k]);
+    toast(met ? 'Scouting saved — minimum met 💪' : 'Saved — still below the daily minimum');
     renderMyScouting(day);
   });
 }
@@ -1589,7 +1593,7 @@ async function renderScoutingBoard() {
       <td>${!m.today ? '<span class="pill declined">Not yet</span>' : m.today.metMinimum ? '<span class="pill active">Minimum met</span>' : '<span class="pill pending">Below minimum</span>'}</td>
       <td class="num ${m.today ? (m.today.dms >= data.minimum.dms ? 'pos' : 'neg') : ''}"><b>${m.today ? m.today.dms : '—'}</b></td>
       <td class="num ${m.today ? (m.today.posts >= data.minimum.posts ? 'pos' : 'neg') : ''}"><b>${m.today ? m.today.posts : '—'}</b></td>
-      <td class="num">${m.today ? m.today.engagements : '—'}</td>
+      <td class="num ${m.today ? (m.today.engagements >= data.minimum.engagements ? 'pos' : 'neg') : ''}"><b>${m.today ? m.today.engagements : '—'}</b></td>
       <td class="num">${m.today ? m.today.podcasts.length : '—'}</td>
       <td class="num"><b>${m.week.dms}</b> / ${m.week.posts} / ${m.week.engagements}</td>
       <td class="num">${m.week.metDays}/7</td>
@@ -1613,6 +1617,7 @@ async function renderScoutingBoard() {
         <form id="min-form" class="inline-form">
           <label>Daily minimum DMs <input name="dms" type="number" min="0" step="1" value="${data.minimum.dms}"></label>
           <label>Daily minimum posts <input name="posts" type="number" min="0" step="1" value="${data.minimum.posts}"></label>
+          <label>Daily minimum engagements <input name="engagements" type="number" min="0" step="1" value="${data.minimum.engagements}"></label>
           <button class="btn soft" type="submit">Save minimum</button>
         </form>
         <div class="error" id="min-err"></div>
@@ -1628,7 +1633,7 @@ async function renderScoutingBoard() {
   app.querySelectorAll('[data-scout]').forEach((r) => r.addEventListener('click', () => (location.hash = `#/scouting/${r.dataset.scout}`)));
   onSubmit(app.querySelector('#min-form'), async (d) => {
     try {
-      state.info.scoutingMinimum = await api('/api/admin/scouting-minimum', { method: 'PUT', body: { dms: d.dms, posts: d.posts } });
+      state.info.scoutingMinimum = await api('/api/admin/scouting-minimum', { method: 'PUT', body: { dms: d.dms, posts: d.posts, engagements: d.engagements } });
       toast('Daily minimum updated');
       renderScoutingBoard();
     } catch (err) {
@@ -1671,6 +1676,53 @@ function progressBar(goals) {
   const pct = goals.length ? Math.round((done / goals.length) * 100) : 0;
   return `<div class="goal-progress"><div><b>${done} of ${goals.length}</b> done</div><span>${pct}%</span></div>
     <div class="track" style="height:10px"><div style="width:${pct}%;background:linear-gradient(90deg,var(--gold-bright),var(--gold))"></div></div>`;
+}
+
+function minRow(icon, cls, label, value, min) {
+  const met = value >= min;
+  const pct = min ? Math.min(100, (value / min) * 100) : 100;
+  return `<div class="ds-row">
+    <span class="ds-ico ${cls}">${icon}</span>
+    <div><div class="ds-top"><span>${label}</span><b class="${met ? 'pos' : ''}">${value}<small> / ${min}</small></b></div>
+    <div class="track"><div style="width:${pct}%;background:${met ? 'var(--income)' : 'var(--gold)'}"></div></div></div>
+  </div>`;
+}
+
+function myScoutingCard(data) {
+  const t = data.entries.find((e) => e.date === data.today);
+  const v = t || { dms: 0, posts: 0, engagements: 0, podcasts: [] };
+  const status = !t ? '<span class="pill declined">Not logged</span>' : t.metMinimum ? '<span class="pill active">Minimum met</span>' : '<span class="pill pending">Below minimum</span>';
+  return `
+    <section class="card">
+      <div class="card-head"><h2>Today's scouting</h2>${status}</div>
+      ${minRow(ICONS.dm, 'dm', 'Scouting DMs', v.dms, data.minimum.dms)}
+      ${minRow(ICONS.post, 'post', 'Posts', v.posts, data.minimum.posts)}
+      ${minRow(ICONS.heartSm, 'eng', 'Engagements', v.engagements, data.minimum.engagements)}
+      <div class="ds-foot"><span>🔥 <b>${data.streak}</b> day streak</span><span>Minimum met <b>${data.week.metDays}/7</b> days</span><span>${ICONS.mic} <b>${v.podcasts.length}</b> podcast${v.podcasts.length === 1 ? '' : 's'} today</span></div>
+      <a class="btn ${t ? 'soft' : ''} block" href="#/scouting">${t ? 'Update today’s scouting' : 'Log today’s scouting'}</a>
+    </section>`;
+}
+
+function teamScoutingCard(data) {
+  const logged = data.members.filter((m) => m.today).length;
+  const met = data.members.filter((m) => m.today?.metMinimum).length;
+  return `
+    <section class="card">
+      <div class="card-head"><h2>Team scouting today</h2><a class="link-btn" href="#/scouting">Board</a></div>
+      <div class="ds-summary"><div><b>${logged}/${data.members.length}</b><small>logged</small></div><div><b class="pos">${met}</b><small>hit the minimum</small></div></div>
+      ${
+        data.members.length
+          ? `<ul class="tx-list">${data.members
+              .map(
+                (m) => `<li class="tx"><span class="avatar sm blue">${esc(initials(m.displayName))}</span>
+                  <div style="min-width:0"><div class="tx-title">${esc(m.displayName)}</div>
+                  <div class="tx-sub">${m.today ? `${m.today.dms} DMs · ${m.today.posts} posts · ${m.today.engagements} engagements` : 'Not logged yet'}</div></div>
+                  ${!m.today ? '<span class="pill declined">Not yet</span>' : m.today.metMinimum ? '<span class="pill active">Met</span>' : '<span class="pill pending">Below</span>'}</li>`,
+              )
+              .join('')}</ul>`
+          : `<div class="empty">${ICONS.inbox}No members yet.</div>`
+      }
+    </section>`;
 }
 
 function myGoalsCard(data) {

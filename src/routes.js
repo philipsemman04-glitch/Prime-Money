@@ -20,8 +20,8 @@ const monthName = (month) =>
 
 // Scouting summary for one member from their recent entries.
 // Daily scouting minimums (the admin can change them).
-const DEFAULT_MINIMUM = { dms: 40, posts: 2 };
-const metMinimum = (e, min) => e.dms >= min.dms && e.posts >= min.posts;
+const DEFAULT_MINIMUM = { dms: 40, posts: 2, engagements: 40 };
+const metMinimum = (e, min) => e.dms >= min.dms && e.posts >= min.posts && e.engagements >= min.engagements;
 
 function scoutingSummary(entries, today, min = DEFAULT_MINIMUM) {
   const days = new Set(entries.map((e) => e.date));
@@ -246,10 +246,16 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
   }
 
   async function scoutingMinimum() {
-    const [dms, posts] = await Promise.all([store.getSetting('scout_min_dms'), store.getSetting('scout_min_posts')]);
+    const [dms, posts, engagements] = await Promise.all([
+      store.getSetting('scout_min_dms'),
+      store.getSetting('scout_min_posts'),
+      store.getSetting('scout_min_engagements'),
+    ]);
+    const pick = (v, d) => (v === null ? d : Number(v));
     return {
-      dms: dms === null ? DEFAULT_MINIMUM.dms : Number(dms),
-      posts: posts === null ? DEFAULT_MINIMUM.posts : Number(posts),
+      dms: pick(dms, DEFAULT_MINIMUM.dms),
+      posts: pick(posts, DEFAULT_MINIMUM.posts),
+      engagements: pick(engagements, DEFAULT_MINIMUM.engagements),
     };
   }
 
@@ -790,10 +796,14 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
   app.put('/api/admin/scouting-minimum', requireUser, requireAdmin, async (req, res) => {
     const dms = count(req.body?.dms);
     const posts = count(req.body?.posts);
-    if (dms === null || posts === null) return res.status(400).json({ error: 'Minimums must be whole numbers.' });
+    const engagements = count(req.body?.engagements);
+    if (dms === null || posts === null || engagements === null) {
+      return res.status(400).json({ error: 'Minimums must be whole numbers.' });
+    }
     await store.setSetting('scout_min_dms', String(dms));
     await store.setSetting('scout_min_posts', String(posts));
-    res.json({ dms, posts });
+    await store.setSetting('scout_min_engagements', String(engagements));
+    res.json({ dms, posts, engagements });
   });
 
   app.get('/api/admin/members/:id/scouting', requireUser, requireAdmin, async (req, res) => {

@@ -181,7 +181,9 @@ function scoutingReminderEmail({ member, minimum, teamName, url }) {
       heading: "Don't forget today's scouting 📋",
       lines: [
         `Hi ${escapeHtml(first)}, you haven't logged your scouting for today yet.`,
-        minimum ? `Today's minimum is <b>${minimum.dms} scouting DMs</b> and <b>${minimum.posts} posts</b>.` : '',
+        minimum
+          ? `Today's minimum is <b>${minimum.dms} scouting DMs</b>, <b>${minimum.posts} posts</b> and <b>${minimum.engagements} engagements</b>.`
+          : '',
         'Add your DMs, posts, engagements and any podcasts you watched — it only takes a minute.',
       ].filter(Boolean),
       button: 'Log my scouting',
