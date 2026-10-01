@@ -2,7 +2,7 @@
 
 A private money-management platform for a team.
 
-- **Every member gets their own dashboard**: balance, monthly income and spending, 6‑month trend, spending by category, and a transaction list.
+- **Every member gets their own dashboard**: the money made in the selected month (use the arrows to see other months), monthly income and spending, 6‑month trend, spending by category, and a transaction list.
 - **The admin sees everyone centrally**: team totals, a per-member table, and can open any member's dashboard (read-only).
 - **Members create their own username and password the first time** via a one-time invite link from the admin, then log in normally after that.
 - **Pots**: every income is split into Business 30%, Personal 30%, Savings 20% and Investment 20% (the admin can change the split on the Team page). Expenses come out of a pot (Personal by default).

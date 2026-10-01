@@ -517,7 +517,7 @@ async function renderInvite(token) {
 
 // --- dashboard building blocks --------------------------------------------
 
-function balanceCard({ title, balance, summary, actions = '' }) {
+function balanceCard({ title, summary, actions = '' }) {
   const [y, m] = state.month.split('-').map(Number);
   const days = new Date(y, m, 0).getDate();
   const now = new Date();
@@ -536,9 +536,9 @@ function balanceCard({ title, balance, summary, actions = '' }) {
           ${monthNav()}
         </div>
       </div>
-      <div class="cap">Total balance</div>
-      <div class="big ${balance < 0 ? 'neg' : ''}">${money(balance)}</div>
-      <div class="net ${tone(summary.net)}">${money(summary.net, { sign: true })} this month</div>
+      <div class="cap">Total made in ${esc(monthLabel(state.month))}</div>
+      <div class="big">${money(summary.income)}</div>
+      <div class="net ${tone(summary.net)}">${money(summary.net, { sign: true })} net after spending</div>
       <div class="timeline">
         <div class="rail"></div><div class="fill" style="width:${pct}%"></div>
         <div class="stops">
@@ -808,7 +808,6 @@ async function renderDashboard() {
       <div class="s5">${potsCard(pots, { holder: u.displayName, userId: u.id, canRequest: true })}</div>
       <div class="s7">${balanceCard({
         title: 'My account',
-        balance: summary.balance,
         summary,
         actions: `<div class="btn-stack"><button type="button" class="btn block" id="add-tx-2">${ICONS.plus} Add transaction</button><a class="btn soft block" href="#/requests/new">Request funds</a></div>`,
       })}</div>
@@ -866,7 +865,7 @@ async function renderTeam() {
         <td>${statusPill(m.status)}</td>
         <td class="num pos">${money(m.income)}</td>
         <td class="num neg">${money(m.expense)}</td>
-        <td class="num"><strong class="${tone(m.balance)}">${money(m.balance)}</strong></td>
+        <td class="num"><strong class="${tone(m.net)}">${money(m.net, { sign: true })}</strong></td>
         <td class="muted">${formatDateTime(m.lastLoginAt)}</td>
       </tr>`;
     })
@@ -875,7 +874,7 @@ async function renderTeam() {
   app.innerHTML = `
     ${pending.length ? `<a class="banner" href="#/requests">${ICONS.bell}<span><b>${pending.length} fund request${pending.length > 1 ? 's' : ''}</b> waiting for your approval</span><span class="go btn small">Review</span></a>` : ''}
     <div class="grid">
-      <div class="s7">${balanceCard({ title: `${state.info.teamName} · ${active} active member${active === 1 ? '' : 's'}`, balance: data.team.balance, summary: { ...data.team, month: data.month } })}</div>
+      <div class="s7">${balanceCard({ title: `${state.info.teamName} · ${active} active member${active === 1 ? '' : 's'}`, summary: { ...data.team, month: data.month } })}</div>
       <div class="s5"><section class="card" style="height:100%">
         <div class="card-head"><h2>Pending requests</h2><a class="link-btn" href="#/requests">View all</a></div>
         ${
@@ -894,7 +893,7 @@ async function renderTeam() {
       <div class="s12"><section class="card">
         <div class="card-head"><h2>Members</h2><span class="sub">${esc(monthLabel(state.month))} · click a member to open their dashboard</span></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Member</th><th>Status</th><th class="num">Income</th><th class="num">Spent</th><th class="num">Balance</th><th>Last login</th></tr></thead>
+          <thead><tr><th>Member</th><th>Status</th><th class="num">Income</th><th class="num">Spent</th><th class="num">Net</th><th>Last login</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
       </section></div>
@@ -1068,7 +1067,7 @@ async function renderMemberView(id) {
     <a class="link-btn" href="#/team">${ICONS.left} Back to team</a>
     <div class="grid">
       <div class="s5">${potsCard(pots, { holder: m.displayName, userId: m.id, canRequest: false })}</div>
-      <div class="s7">${balanceCard({ title: `${m.displayName.split(' ')[0]}'s account`, balance: summary.balance, summary })}</div>
+      <div class="s7">${balanceCard({ title: `${m.displayName.split(' ')[0]}'s account`, summary })}</div>
       <div class="s7">${transactionsCard(transactions, { editable: false, expanded: state.expanded })}</div>
       <div class="s5">${categoriesCard(summary)}</div>
       ${
