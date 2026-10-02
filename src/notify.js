@@ -219,4 +219,4 @@ function goalCommentEmail({ member, comment, monthLabel, teamName, url }) {
   };
 }
 
-module.exports = { createNotifier, fundRequestEmail, memberRequestEmail, scoutingReminderEmail, goalsSentEmail, goalCommentEmail };
+module.exports = { formatMoney, POT_LABELS, createNotifier, fundRequestEmail, memberRequestEmail, scoutingReminderEmail, goalsSentEmail, goalCommentEmail };

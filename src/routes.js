@@ -9,7 +9,21 @@ const {
   scoutingReminderEmail,
   goalsSentEmail,
   goalCommentEmail,
+  formatMoney,
+  POT_LABELS,
 } = require('./notify');
+const { createPusher } = require('./push');
+
+// Browsers' push services. Devices may only register endpoints on these hosts.
+const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'push.apple.com', 'notify.windows.com'];
+const isPushEndpoint = (value) => {
+  try {
+    const u = new URL(value);
+    return u.protocol === 'https:' && PUSH_HOSTS.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`));
+  } catch {
+    return false;
+  }
+};
 
 // Dates for scouting and goals follow the team's time zone (Lagos by default).
 const TEAM_TZ = process.env.TEAM_TIMEZONE || 'Africa/Lagos';
@@ -35,6 +49,8 @@ function scoutingSummary(entries, today, min = DEFAULT_MINIMUM) {
     dms: list.reduce((s, e) => s + e.dms, 0),
     posts: list.reduce((s, e) => s + e.posts, 0),
     engagements: list.reduce((s, e) => s + e.engagements, 0),
+    responses: list.reduce((s, e) => s + (e.responses ?? 0), 0),
+    optimisedDays: list.filter((e) => e.optimised).length,
     podcasts: list.reduce((s, e) => s + e.podcasts.length, 0),
     days: list.length,
     metDays: list.filter((e) => metMinimum(e, min)).length,
@@ -47,7 +63,16 @@ function scoutingSummary(entries, today, min = DEFAULT_MINIMUM) {
   };
 }
 
-const publicScouting = (e) => ({ date: e.date, dms: e.dms, posts: e.posts, engagements: e.engagements, podcasts: e.podcasts });
+const publicScouting = (e) => ({
+  date: e.date,
+  dms: e.dms,
+  posts: e.posts,
+  engagements: e.engagements,
+  responses: e.responses ?? 0,
+  optimised: Boolean(e.optimised),
+  orders: e.orders ?? '',
+  podcasts: e.podcasts,
+});
 const publicGoal = (g) => ({ id: g.id, text: g.text, month: g.month, done: g.done, doneAt: g.doneAt, createdAt: g.createdAt });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -208,7 +233,7 @@ async function dashboardFor(store, userId, month) {
   };
 }
 
-function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate, notifier = createNotifier(), cronSecret } = {}) {
+function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate, notifier = createNotifier(), pusher = createPusher(), cronSecret } = {}) {
   if (!sessionSecret) throw new Error('sessionSecret is required');
   const app = express();
 
@@ -222,8 +247,40 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     res.setHeader('Set-Cookie', auth.sessionCookie(token, { secure: secureCookies, maxAgeMs: auth.SESSION_TTL_MS }));
   }
 
+  // Phone notifications to some members. Never fails the caller; devices
+  // that have unsubscribed are forgotten. Returns the ids of the users reached.
+  async function pushTo(userIds, payload) {
+    const reached = new Set();
+    if (!pusher.enabled || !userIds.length) return reached;
+    try {
+      const ids = new Set(userIds);
+      const devices = (await store.listDevices()).filter((d) => ids.has(d.userId));
+      await Promise.all(
+        devices.map(async (d) => {
+          try {
+            await pusher.send({ endpoint: d.endpoint, keys: d.keys }, payload);
+            reached.add(d.userId);
+          } catch (err) {
+            if (err.statusCode === 404 || err.statusCode === 410) await store.deleteDevice(d.id).catch(() => {});
+            else console.error('Push failed:', err.message);
+          }
+        }),
+      );
+    } catch (err) {
+      console.error('Push failed:', err.message);
+    }
+    return reached;
+  }
+  const adminIds = async () => (await store.listUsers()).filter((u) => u.role === 'admin' && u.status === 'active').map((u) => u.id);
+
   // Tell a member about their request. Never fails the caller.
+  const REQUEST_PUSH = {
+    approved: (r, amount) => ({ title: 'Request approved ✅', body: `Your ${amount} request "${r.title}" was approved.` }),
+    paid: (r, amount) => ({ title: 'Payment sent 💸', body: `Your ${amount} for "${r.title}" has been paid. Tap to see the receipt.` }),
+    declined: (r, amount) => ({ title: 'Request declined', body: `Your ${amount} request "${r.title}" was declined.${r.adminNote ? ` ${r.adminNote}` : ''}` }),
+  };
   async function emailMember(req, request, kind) {
+    await pushTo([request.userId], { ...REQUEST_PUSH[kind](request, formatMoney(request.amountCents, 'USD')), url: '/#/requests', tag: `request-${request.id}` });
     try {
       const member = await store.getUser(request.userId);
       if (!member?.email || !notifier.enabled) return;
@@ -333,6 +390,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       pots: POTS,
       announcements: req.user ? (await store.listAnnouncements()).sort(byNewest).slice(0, 10) : [],
       scoutingMinimum: req.user ? await scoutingMinimum() : undefined,
+      pushKey: req.user ? pusher.publicKey : undefined,
       pendingRequests: pending ? pending.length : undefined,
       ...(req.user?.role === 'admin'
         ? {
@@ -535,9 +593,13 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const dms = count(req.body?.dms);
     const posts = count(req.body?.posts);
     const engagements = count(req.body?.engagements);
-    if (dms === null || posts === null || engagements === null) {
-      return res.status(400).json({ error: 'DMs, posts and engagements must be whole numbers.' });
+    const responses = count(req.body?.responses);
+    if (dms === null || posts === null || engagements === null || responses === null) {
+      return res.status(400).json({ error: 'DMs, posts, engagements and responses must be whole numbers.' });
     }
+    const optimised = req.body?.optimised === true;
+    const orders = String(req.body?.orders ?? '').trim();
+    if (orders.length > 300) return res.status(400).json({ error: 'Keep the orders note under 300 characters.' });
     const raw = Array.isArray(req.body?.podcasts) ? req.body.podcasts : [];
     if (raw.length > 10) return res.status(400).json({ error: 'Up to 10 podcasts per day.' });
     const podcasts = [];
@@ -551,8 +613,39 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       if (!lesson || lesson.length > 1500) return res.status(400).json({ error: `Write what you learnt from "${title}".` });
       podcasts.push({ title, speaker, lesson });
     }
-    await store.saveScouting({ userId: req.user.id, memberName: req.user.displayName, date, dms, posts, engagements, podcasts });
+    await store.saveScouting({ userId: req.user.id, memberName: req.user.displayName, date, dms, posts, engagements, responses, optimised, orders, podcasts });
     res.json(await scoutingFor(req.user.id));
+  });
+
+  // --- phone notifications ----------------------------------------------
+
+  app.post('/api/me/devices', requireUser, async (req, res) => {
+    if (!pusher.enabled) return res.status(503).json({ error: 'Phone notifications are not set up yet.' });
+    const sub = req.body?.subscription;
+    const endpoint = sub?.endpoint;
+    const keys = { p256dh: sub?.keys?.p256dh, auth: sub?.keys?.auth };
+    if (typeof endpoint !== 'string' || endpoint.length > 1500 || !isPushEndpoint(endpoint)) {
+      return res.status(400).json({ error: "This browser's notification address isn't supported." });
+    }
+    if (![keys.p256dh, keys.auth].every((k) => typeof k === 'string' && /^[A-Za-z0-9_-]{8,200}={0,2}$/.test(k))) {
+      return res.status(400).json({ error: 'Invalid notification keys.' });
+    }
+    const label = `${req.user.displayName} · ${String(req.body?.label ?? 'Device').slice(0, 60)}`;
+    await store.saveDevice({ userId: req.user.id, endpoint, keys, label });
+    res.status(201).json({ ok: true });
+  });
+
+  app.delete('/api/me/devices', requireUser, async (req, res) => {
+    const endpoint = String(req.body?.endpoint ?? '');
+    const mine = await store.listDevices({ userId: req.user.id });
+    for (const d of mine.filter((x) => x.endpoint === endpoint)) await store.deleteDevice(d.id);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/me/devices/test', requireUser, async (req, res) => {
+    const reached = await pushTo([req.user.id], { title: 'Notifications are on ✅', body: 'This is how Prime Money updates will appear.', url: '/#/' });
+    if (!reached.size) return res.status(400).json({ error: 'No device of yours could be reached. Turn notifications on again.' });
+    res.json({ ok: true });
   });
 
   // --- goals (monthly) ---------------------------------------------------
@@ -588,6 +681,11 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     for (const t of texts) created.push(await store.createGoal({ userId: req.user.id, month, text: t }));
 
     if (req.user.role !== 'admin') {
+      await pushTo(await adminIds(), {
+        title: 'New goals 🎯',
+        body: `${req.user.displayName} sent ${created.length} goal${created.length === 1 ? '' : 's'} for ${monthName(month)}.`,
+        url: '/#/goals',
+      });
       const to = await store.getSetting('notify_email');
       const teamName = (await store.getSetting('team_name')) || 'Team Prime';
       await sendQuietly('Goals sent', {
@@ -676,6 +774,14 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       accountName: holder,
     });
 
+    if (req.user.role !== 'admin') {
+      await pushTo(await adminIds(), {
+        title: 'New fund request 💰',
+        body: `${req.user.displayName} asked for ${formatMoney(usdCents, 'USD')} from ${POT_LABELS[pot]}${title ? `: ${title}` : ''}.`,
+        url: '/#/requests',
+        tag: `request-${request.id}`,
+      });
+    }
     // Email the admin. A failed email never fails the request itself.
     const notifyEmail = req.user.role === 'admin' ? null : await store.getSetting('notify_email');
     if (notifyEmail && notifier.enabled) {
@@ -844,6 +950,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const key = `goal_comment:${member.id}:${month}`;
     if (comment) await store.setSetting(key, comment);
     else await store.deleteSetting(key);
+    if (comment) await pushTo([member.id], { title: 'Comment on your goals', body: comment.slice(0, 180), url: '/#/goals' });
     if (comment && member.email) {
       const teamName = (await store.getSetting('team_name')) || 'Team Prime';
       await sendQuietly('Goal comment', {
@@ -867,17 +974,22 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       scoutingMinimum(),
     ]);
     const logged = new Set(entries.map((e) => e.userId));
-    const due = users.filter((u) => u.role === 'member' && u.status === 'active' && u.email && !logged.has(u.id));
-    let sent = 0;
-    for (const member of due) {
+    const due = users.filter((u) => u.role === 'member' && u.status === 'active' && !logged.has(u.id));
+    const reached = await pushTo(
+      due.map((u) => u.id),
+      { title: "Log today's scouting 📝", body: `You haven't logged today yet. Minimum: ${min.dms} messages, ${min.posts} posts, ${min.engagements} comments.`, url: '/#/scouting', tag: 'scouting-reminder' },
+    );
+    let emailed = 0;
+    for (const member of due.filter((u) => u.email && notifier.enabled)) {
       try {
         await notifier.send({ to: member.email, ...scoutingReminderEmail({ member, minimum: min, teamName: teamName || 'Team Prime', url: appUrl(req, '#/scouting') }) });
-        sent++;
+        reached.add(member.id);
+        emailed++;
       } catch (err) {
         console.error('Scouting reminder failed:', err.message);
       }
     }
-    res.json({ date: today, reminded: sent, alreadyLogged: logged.size });
+    res.json({ date: today, reminded: reached.size, emailed, alreadyLogged: logged.size });
   });
 
   // --- admin: fund requests -------------------------------------------
@@ -979,7 +1091,11 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     if (!message) return res.status(400).json({ error: 'Write a message first.' });
     if (message.length > 500) return res.status(400).json({ error: 'Keep it under 500 characters.' });
     if (!LEVELS.includes(level)) return res.status(400).json({ error: 'Pick a type for the announcement.' });
-    res.status(201).json(await store.createAnnouncement({ level, message }));
+    const created = await store.createAnnouncement({ level, message });
+    const others = (await store.listUsers()).filter((u) => u.status === 'active' && u.id !== req.user.id).map((u) => u.id);
+    const heading = { info: '📢 Announcement', important: '⚠️ Important', 'good news': '🎉 Good news' }[level];
+    await pushTo(others, { title: heading, body: message.slice(0, 180), url: '/#/', tag: `announcement-${created.id}` });
+    res.status(201).json(created);
   });
 
   app.delete('/api/admin/announcements/:id', requireUser, requireAdmin, async (req, res) => {

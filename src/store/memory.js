@@ -12,6 +12,22 @@ class MemoryStore {
     this.announcements = new Map();
     this.scouting = new Map();
     this.goals = new Map();
+    this.devices = new Map();
+  }
+
+  async listDevices({ userId } = {}) {
+    return [...this.devices.values()].filter((d) => !userId || d.userId === userId).map((d) => structuredClone(d));
+  }
+
+  async saveDevice({ userId, endpoint, keys, label }) {
+    const existing = [...this.devices.values()].find((d) => d.endpoint === endpoint);
+    const d = { id: existing?.id ?? crypto.randomUUID(), userId, endpoint, keys: structuredClone(keys), label: label ?? '' };
+    this.devices.set(d.id, d);
+    return structuredClone(d);
+  }
+
+  async deleteDevice(id) {
+    this.devices.delete(id);
   }
 
   async listScouting({ userId, from, to } = {}) {

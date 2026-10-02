@@ -114,6 +114,9 @@ function toScouting(page) {
     dms: readNumber(p['DMs']) ?? 0,
     posts: readNumber(p['Posts']) ?? 0,
     engagements: readNumber(p['Engagements']) ?? 0,
+    responses: readNumber(p['Responses']) ?? 0,
+    optimised: p['Optimised']?.checkbox ?? false,
+    orders: readText(p['Orders']) ?? '',
     podcasts,
     updatedAt: page.last_edited_time ?? page.created_time,
   };
@@ -127,10 +130,28 @@ function scoutingProperties(e) {
     DMs: { number: e.dms },
     Posts: { number: e.posts },
     Engagements: { number: e.engagements },
+    Responses: { number: e.responses ?? 0 },
+    Optimised: { checkbox: Boolean(e.optimised) },
+    Orders: { rich_text: text(e.orders ?? '') },
     'Podcast notes': {
       rich_text: text(e.podcasts.map((x) => `${x.title}${x.speaker ? ` (${x.speaker})` : ''}: ${x.lesson}`).join('\n')),
     },
     'Podcasts data': { rich_text: text(JSON.stringify(e.podcasts)) },
+  };
+}
+
+function toDevice(page) {
+  const p = page.properties;
+  let keys = null;
+  try {
+    keys = JSON.parse(readText(p['Keys']) || 'null');
+  } catch {}
+  return {
+    id: page.id,
+    userId: p['Member']?.relation?.[0]?.id ?? null,
+    endpoint: readText(p['Endpoint']),
+    keys,
+    label: readText(p['Device']) ?? '',
   };
 }
 
@@ -182,7 +203,7 @@ function nextMonthStart(month) {
 }
 
 class NotionStore {
-  constructor({ token, membersId, transactionsId, settingsId, requestsId, scoutingId, goalsId, client }) {
+  constructor({ token, membersId, transactionsId, settingsId, requestsId, scoutingId, goalsId, devicesId, client }) {
     this.notion = client ?? new Client({ auth: token });
     this.ids = {
       members: membersId,
@@ -191,6 +212,7 @@ class NotionStore {
       requests: requestsId,
       scouting: scoutingId,
       goals: goalsId,
+      devices: devicesId,
     };
     this.settingsCache = null;
   }
@@ -242,6 +264,34 @@ class NotionStore {
     });
     this.settingsCache = null;
     return { id: page.id, level, message, createdAt: page.created_time };
+  }
+
+  // --- devices that get phone notifications ---
+
+  async listDevices({ userId } = {}) {
+    if (!this.ids.devices) return [];
+    const body = userId ? { filter: { property: 'Member', relation: { contains: userId } } } : {};
+    return (await this.queryAll(this.ids.devices, body)).map(toDevice).filter((d) => d.endpoint && d.keys);
+  }
+
+  async saveDevice({ userId, endpoint, keys, label }) {
+    if (!this.ids.devices) throw new Error('The Devices table is not set up.');
+    const properties = {
+      Device: { title: text(label || 'Device') },
+      Member: { relation: [{ id: userId }] },
+      Endpoint: { rich_text: text(endpoint) },
+      Keys: { rich_text: text(JSON.stringify(keys)) },
+      Added: date(new Date().toISOString().slice(0, 10)),
+    };
+    const [existing] = await this.queryAll(this.ids.devices, { filter: { property: 'Endpoint', rich_text: { equals: endpoint } } });
+    const page = existing
+      ? await this.notion.pages.update({ page_id: existing.id, properties })
+      : await this.notion.pages.create({ parent: { type: 'data_source_id', data_source_id: this.ids.devices }, properties });
+    return toDevice(page);
+  }
+
+  async deleteDevice(id) {
+    await this.notion.pages.update({ page_id: id, in_trash: true });
   }
 
   async deleteAnnouncement(id) {

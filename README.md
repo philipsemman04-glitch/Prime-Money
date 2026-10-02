@@ -9,8 +9,9 @@ A private money-management platform for a team.
 - **Fund requests**: a member picks a pot, lists what they need with prices, and gives the bank account to pay into. The admin sees a badge on **Requests** (and in the browser tab), and can get an email for each new request (set the address on the Team page), then approves or declines with an optional note. Approving records the payout as an expense from that pot. The admin sends the money and attaches the transfer receipt (screenshot or PDF) when approving or later; the member can open it from their request.
 - **Announcements**: the admin posts messages (Announcement, Important or Good news) from the Team page. They appear at the top of everyone's dashboard, members see a count on the bell, and each person can close them. They are stored as rows in the Notion Settings table titled `announcement · <type>`.
 - **Member emails**: members add an email on sign-up or on their Account page (the admin can set it too). They are emailed when a request is approved, paid (receipt attached) or declined.
-- **Scouting**: every day members log scouting DMs sent, posts posted, engagements, and the podcasts they watched (who was speaking and what they learnt). The daily minimum is 40 scouting DMs, 2 posts and 40 engagements (the admin can change it on the Scouting board); entries below it are saved but flagged. They can fix yesterday's entry. They see a streak and weekly/monthly totals, and today's progress against the minimum on their dashboard; the admin sees a team board and a dashboard card (who has logged today, who hit the minimum, 7-day totals, streaks) and each member's history. At 7pm (Lagos) members who haven't logged get an email reminder.
+- **Scouting**: every day members log their checklist: scouting messages (DMs), scouting comments (engagements), social media posts, responses, orders, whether they did their social media optimisation, and the podcasts they watched (who was speaking and what they learnt). The daily minimum is 40 scouting messages, 2 posts and 40 scouting comments (the admin can change it on the Scouting board); entries below it are saved but flagged. They can fix yesterday's entry. They see a streak and weekly/monthly totals, and today's progress against the minimum on their dashboard; the admin sees a team board and a dashboard card (who has logged today, who hit the minimum, 7-day totals, streaks) and each member's history. At 7pm (Lagos) members who haven't logged get a reminder by email and phone notification.
 - **Goals**: each month members write goals and send them to the admin (who gets an email). Goals can't be edited or deleted, only added and ticked off — ticked goals are struck through. Goals also show on the dashboard (the admin sees team progress there). Unfinished goals can be carried over to the next month. The admin sees everyone's progress and can leave a comment (emailed to the member).
+- **Phone notifications**: the site can be installed as an app (Chrome: **Install app** / **Add to Home screen**; iPhone: **Share → Add to Home Screen**). Each person turns notifications on from the dashboard prompt or the Account page. They then get a normal phone notification, which opens the right page when tapped, for: new fund requests and goals (admin), request approved / paid / declined, goal comments, announcements, and the evening scouting reminder. iPhones only get notifications when the app is opened from the Home Screen (iOS 16.4 or newer).
 - **Dollars and naira**: all amounts are kept in US dollars. The **$ USD / ₦ NGN** switch shows everything in naira, and members can type entries in either currency. The rate is the live market rate, or a fixed rate the admin sets on the Team page.
 
 ## Where the data lives
@@ -23,8 +24,9 @@ All data is stored in Notion, under the private page **Prime Money — App Datab
 | **Transactions** | Every entry: member, type, amount in USD, original amount/currency, category |
 | **Settings**     | Team name and the exchange rate                                              |
 | **Fund Requests**| Each request: member, pot, items, total, bank details, status, note, receipt |
-| **Scouting Log** | One row per member per day: DMs, posts, engagements, podcast notes           |
+| **Scouting Log** | One row per member per day: DMs, posts, engagements, responses, orders, optimisation, podcast notes |
 | **Goals**        | One row per goal: member, month, done                                        |
+| **Devices**      | Phones/browsers that get notifications (used by the app, don't edit)         |
 
 Keep that page private. Don't edit the *Password hash*, *Invite token* or *Session version* columns by hand.
 
@@ -40,6 +42,7 @@ The website runs on Vercel and deploys automatically from the `main` branch. It 
 | `GMAIL_USER`     | Optional. Gmail address to send all emails from (can email any member)                  |
 | `GMAIL_APP_PASSWORD` | Optional. A Google "app password" for that Gmail account (16 letters)               |
 | `EMAIL_FROM`     | Optional. Sender name/address override                                                   |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Keys for phone notifications (generate with `npx web-push generate-vapid-keys`). Changing them turns notifications off on every device until people turn them on again |
 | `CRON_SECRET`    | Protects the daily scouting reminder (`vercel.json` runs it at 18:00 UTC = 7pm Lagos)    |
 | `TEAM_TIMEZONE`  | Optional. Time zone for "today" in scouting and goals; default `Africa/Lagos`           |
 
@@ -47,7 +50,7 @@ Email: with Gmail set, emails go to the admin and to members. With only Resend (
 
 The Notion integration must be connected to the **Prime Money — App Database** page (page menu **•••** → **Connections** → add "Prime Money").
 
-If the Notion tables are ever recreated, set `NOTION_MEMBERS_DS`, `NOTION_TRANSACTIONS_DS`, `NOTION_SETTINGS_DS`, `NOTION_REQUESTS_DS`, `NOTION_SCOUTING_DS` and `NOTION_GOALS_DS` to the new data source IDs.
+If the Notion tables are ever recreated, set `NOTION_MEMBERS_DS`, `NOTION_TRANSACTIONS_DS`, `NOTION_SETTINGS_DS`, `NOTION_REQUESTS_DS`, `NOTION_SCOUTING_DS`, `NOTION_GOALS_DS` and `NOTION_DEVICES_DS` to the new data source IDs.
 
 ## First use
 

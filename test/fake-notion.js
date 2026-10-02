@@ -22,8 +22,9 @@ const SCHEMAS = {
   settings: { Key: 'title', Value: 'rich_text' },
   scouting: {
     Entry: 'title', Member: 'relation', Date: 'date', DMs: 'number', Posts: 'number', Engagements: 'number',
-    'Podcast notes': 'rich_text', 'Podcasts data': 'rich_text',
+    Responses: 'number', Optimised: 'checkbox', Orders: 'rich_text', 'Podcast notes': 'rich_text', 'Podcasts data': 'rich_text',
   },
+  devices: { Device: 'title', Member: 'relation', Endpoint: 'rich_text', Keys: 'rich_text', Added: 'date' },
   goals: { Goal: 'title', Member: 'relation', Month: 'rich_text', Done: 'checkbox', 'Done on': 'date' },
 };
 
@@ -33,7 +34,7 @@ function notFound() {
 
 class FakeNotion {
   constructor(ids, { pageSize = 2 } = {}) {
-    this.schemaFor = { [ids.membersId]: SCHEMAS.members, [ids.transactionsId]: SCHEMAS.transactions, [ids.settingsId]: SCHEMAS.settings, [ids.requestsId]: SCHEMAS.requests, [ids.scoutingId]: SCHEMAS.scouting, [ids.goalsId]: SCHEMAS.goals };
+    this.schemaFor = { [ids.membersId]: SCHEMAS.members, [ids.transactionsId]: SCHEMAS.transactions, [ids.settingsId]: SCHEMAS.settings, [ids.requestsId]: SCHEMAS.requests, [ids.scoutingId]: SCHEMAS.scouting, [ids.goalsId]: SCHEMAS.goals, [ids.devicesId]: SCHEMAS.devices };
     this.pageSize = pageSize; // small, to exercise pagination
     this.pages = new Map();
     this.calls = 0;

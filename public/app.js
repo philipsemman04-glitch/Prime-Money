@@ -110,6 +110,9 @@ const ICONS = {
   mic: svg('<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v5"/>', 18),
   dm: svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>', 18),
   post: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>', 18),
+  reply: svg('<path d="M9 17 4 12l5-5"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>', 18),
+  bag: svg('<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>', 18),
+  spark: svg('<path d="m12 3 1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/>', 18),
   heartSm: svg('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>', 18),
   megaphone: svg('<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>'),
   inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>', 28),
@@ -370,6 +373,7 @@ document.getElementById('logout').addEventListener('click', async () => {
 async function boot() {
   state.info = await api('/api/state');
   route();
+  if (state.info.user) refreshPushDevice();
 }
 
 function route() {
@@ -804,6 +808,7 @@ async function renderDashboard() {
   const scoutCard = !scouting ? '' : isAdmin ? teamScoutingCard(scouting) : myScoutingCard(scouting);
   app.innerHTML = `
     ${announcementsHtml()}
+    <div id="push-prompt"></div>
     <div class="grid">
       <div class="s5">${potsCard(pots, { holder: u.displayName, userId: u.id, canRequest: true })}</div>
       <div class="s7">${balanceCard({
@@ -820,6 +825,7 @@ async function renderDashboard() {
     </div>`;
   bindCommon(renderDashboard);
   bindAnnouncements(renderDashboard);
+  fillPushPrompt();
   bindPotsCard(pots, renderDashboard);
   bindGoalChecks(renderDashboard);
   const add = () => openAddTransaction(renderDashboard);
@@ -1448,9 +1454,10 @@ function statTiles(t, label) {
   return `
     <div class="mini-label">${esc(label)}</div>
     <div class="stat-tiles">
-      <div><span class="ico dm">${ICONS.dm}</span><b>${t.dms}</b><small>DMs</small></div>
+      <div><span class="ico dm">${ICONS.dm}</span><b>${t.dms}</b><small>Messages</small></div>
       <div><span class="ico post">${ICONS.post}</span><b>${t.posts}</b><small>Posts</small></div>
-      <div><span class="ico eng">${ICONS.heartSm}</span><b>${t.engagements}</b><small>Engagements</small></div>
+      <div><span class="ico eng">${ICONS.heartSm}</span><b>${t.engagements}</b><small>Comments</small></div>
+      <div><span class="ico resp">${ICONS.reply}</span><b>${t.responses ?? 0}</b><small>Responses</small></div>
       <div><span class="ico podc">${ICONS.mic}</span><b>${t.podcasts}</b><small>Podcasts</small></div>
     </div>`;
 }
@@ -1478,8 +1485,9 @@ function scoutingHistory(entries, title = 'History') {
           <details class="day" ${e === entries[0] ? 'open' : ''}>
             <summary>
               <b>${esc(prettyDay(e.date))} ${e.metMinimum === undefined ? '' : e.metMinimum ? '<span class="pill active">Minimum met</span>' : '<span class="pill declined">Below minimum</span>'}</b>
-              <span class="chips"><span>${ICONS.dm}${e.dms}</span><span>${ICONS.post}${e.posts}</span><span>${ICONS.heartSm}${e.engagements}</span><span>${ICONS.mic}${e.podcasts.length}</span></span>
+              <span class="chips"><span>${ICONS.dm}${e.dms}</span><span>${ICONS.post}${e.posts}</span><span>${ICONS.heartSm}${e.engagements}</span><span title="Responses">${ICONS.reply}${e.responses ?? 0}</span><span>${ICONS.mic}${e.podcasts.length}</span>${e.optimised ? `<span title="Social media optimisation done">${ICONS.spark}Optimised</span>` : ''}</span>
             </summary>
+            ${e.orders ? `<div class="pod"><div class="pod-title">${ICONS.bag}<b>Orders</b></div><p>${esc(e.orders)}</p></div>` : ''}
             ${
               e.podcasts.length
                 ? e.podcasts
@@ -1501,7 +1509,7 @@ async function renderMyScouting(day) {
   const data = await api('/api/me/scouting');
   const yesterday = shiftDay(data.today, -1);
   day = day === yesterday ? yesterday : data.today;
-  const entry = data.entries.find((e) => e.date === day) || { dms: '', posts: '', engagements: '', podcasts: [] };
+  const entry = data.entries.find((e) => e.date === day) || { dms: '', posts: '', engagements: '', responses: '', optimised: false, orders: '', podcasts: [] };
 
   app.innerHTML = `
     <div class="grid">
@@ -1514,15 +1522,23 @@ async function renderMyScouting(day) {
           </div>
         </div>
         <p class="muted" style="margin:-8px 0 12px;font-size:13px">${esc(prettyDay(day, { weekday: 'long', day: 'numeric', month: 'long' }))}${data.entries.some((e) => e.date === day) ? ' · saved — you can update it' : ''}</p>
-        <div class="min-note">${ICONS.target} Daily minimum: <b>${data.minimum.dms} scouting DMs</b>, <b>${data.minimum.posts} posts</b> and <b>${data.minimum.engagements} engagements</b></div>
+        <div class="min-note">${ICONS.target} Daily minimum: <b>${data.minimum.dms} scouting messages</b>, <b>${data.minimum.posts} posts</b> and <b>${data.minimum.engagements} scouting comments</b></div>
         <form id="scout">
           <div class="num-row">
-            <label><span class="num-ico dm">${ICONS.dm}</span>Scouting DMs sent<input name="dms" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.dms)}">
+            <label><span class="num-ico dm">${ICONS.dm}</span>Scouting messages (DMs)<input name="dms" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.dms)}">
               <span class="min-bar" data-min="dms"><span class="min-track"><span></span></span><small></small></span></label>
-            <label><span class="num-ico post">${ICONS.post}</span>Posts posted<input name="posts" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.posts)}">
+            <label><span class="num-ico post">${ICONS.post}</span>Social media posts<input name="posts" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.posts)}">
               <span class="min-bar" data-min="posts"><span class="min-track"><span></span></span><small></small></span></label>
-            <label><span class="num-ico eng">${ICONS.heartSm}</span>Engagements<input name="engagements" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.engagements)}">
+            <label><span class="num-ico eng">${ICONS.heartSm}</span>Scouting comments<input name="engagements" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.engagements)}">
               <span class="min-bar" data-min="engagements"><span class="min-track"><span></span></span><small></small></span></label>
+          </div>
+          <div class="num-row">
+            <label><span class="num-ico resp">${ICONS.reply}</span>Responses<input name="responses" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.responses ?? '')}">
+              <small class="muted hint">People who replied to you</small></label>
+            <label><span class="num-ico bagc">${ICONS.bag}</span>Orders<input name="orders" maxlength="300" placeholder="e.g. incoming, 2 closed" value="${esc(entry.orders ?? '')}" style="font-size:16px;font-weight:600">
+              <small class="muted hint">Any orders today</small></label>
+            <label class="opt-box"><span class="num-ico sparkc">${ICONS.spark}</span>Social media optimisation
+              <span class="opt-check"><input name="optimised" type="checkbox" ${entry.optimised ? 'checked' : ''}><span>Done today</span></span></label>
           </div>
           <div class="card-head" style="margin:8px 0 12px"><h2 style="font-size:15px">${ICONS.mic} Podcasts watched</h2></div>
           <div id="pods"></div>
@@ -1573,7 +1589,7 @@ async function renderMyScouting(day) {
       speaker: r.querySelector('.p-speaker').value,
       lesson: r.querySelector('.p-lesson').value,
     }));
-    await api(`/api/me/scouting/${day}`, { method: 'PUT', body: { dms: d.dms, posts: d.posts, engagements: d.engagements, podcasts } });
+    await api(`/api/me/scouting/${day}`, { method: 'PUT', body: { dms: d.dms, posts: d.posts, engagements: d.engagements, responses: d.responses, orders: d.orders, optimised: form.elements.optimised.checked, podcasts } });
     const met = ['dms', 'posts', 'engagements'].every((k) => Number(d[k]) >= data.minimum[k]);
     toast(met ? 'Scouting saved — minimum met 💪' : 'Saved — still below the daily minimum');
     renderMyScouting(day);
@@ -1593,6 +1609,8 @@ async function renderScoutingBoard() {
       <td class="num ${m.today ? (m.today.dms >= data.minimum.dms ? 'pos' : 'neg') : ''}"><b>${m.today ? m.today.dms : '—'}</b></td>
       <td class="num ${m.today ? (m.today.posts >= data.minimum.posts ? 'pos' : 'neg') : ''}"><b>${m.today ? m.today.posts : '—'}</b></td>
       <td class="num ${m.today ? (m.today.engagements >= data.minimum.engagements ? 'pos' : 'neg') : ''}"><b>${m.today ? m.today.engagements : '—'}</b></td>
+      <td class="num">${m.today ? m.today.responses : '—'}</td>
+      <td class="num">${m.today ? (m.today.optimised ? '<span class="pos">✓</span>' : '—') : '—'}</td>
       <td class="num">${m.today ? m.today.podcasts.length : '—'}</td>
       <td class="num"><b>${m.week.dms}</b> / ${m.week.posts} / ${m.week.engagements}</td>
       <td class="num">${m.week.metDays}/7</td>
@@ -1601,8 +1619,8 @@ async function renderScoutingBoard() {
     )
     .join('');
   const team = data.members.reduce(
-    (t, m) => ({ dms: t.dms + m.week.dms, posts: t.posts + m.week.posts, engagements: t.engagements + m.week.engagements, podcasts: t.podcasts + m.week.podcasts }),
-    { dms: 0, posts: 0, engagements: 0, podcasts: 0 },
+    (t, m) => ({ dms: t.dms + m.week.dms, posts: t.posts + m.week.posts, engagements: t.engagements + m.week.engagements, responses: t.responses + m.week.responses, podcasts: t.podcasts + m.week.podcasts }),
+    { dms: 0, posts: 0, engagements: 0, responses: 0, podcasts: 0 },
   );
   app.innerHTML = `
     <div class="grid">
@@ -1610,13 +1628,13 @@ async function renderScoutingBoard() {
         <div class="card-head"><h2>Today</h2><span class="sub">${esc(prettyDay(data.today, { weekday: 'long', day: 'numeric', month: 'long' }))}</span></div>
         <div class="big-count"><b>${logged}</b><span>of ${data.members.length} logged</span></div>
         <div class="track" style="margin-top:12px"><div style="width:${data.members.length ? (logged / data.members.length) * 100 : 0}%;background:var(--income)"></div></div>
-        <p class="muted" style="font-size:13px;margin:12px 0 0">${data.members.filter((m) => m.today?.metMinimum).length} hit the minimum today. Anyone who hasn't logged by the evening gets an email reminder.</p>
+        <p class="muted" style="font-size:13px;margin:12px 0 0">${data.members.filter((m) => m.today?.metMinimum).length} hit the minimum today. Anyone who hasn't logged by 7pm gets a reminder by email and phone notification.</p>
       </section></div>
       <div class="s8"><section class="card">${statTiles(team, 'Whole team · last 7 days')}
         <form id="min-form" class="inline-form">
-          <label>Daily minimum DMs <input name="dms" type="number" min="0" step="1" value="${data.minimum.dms}"></label>
+          <label>Daily minimum messages <input name="dms" type="number" min="0" step="1" value="${data.minimum.dms}"></label>
           <label>Daily minimum posts <input name="posts" type="number" min="0" step="1" value="${data.minimum.posts}"></label>
-          <label>Daily minimum engagements <input name="engagements" type="number" min="0" step="1" value="${data.minimum.engagements}"></label>
+          <label>Daily minimum comments <input name="engagements" type="number" min="0" step="1" value="${data.minimum.engagements}"></label>
           <button class="btn soft" type="submit">Save minimum</button>
         </form>
         <div class="error" id="min-err"></div>
@@ -1624,7 +1642,7 @@ async function renderScoutingBoard() {
       <div class="s12"><section class="card">
         <div class="card-head"><h2>Team board</h2><span class="sub">Ranked by DMs in the last 7 days · click a member for their history</span></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Member</th><th>Today</th><th class="num">DMs</th><th class="num">Posts</th><th class="num">Engag.</th><th class="num">Podcasts</th><th class="num">7 days (DM / post / eng.)</th><th class="num">Min. met</th><th class="num">Streak</th></tr></thead>
+          <thead><tr><th>Member</th><th>Today</th><th class="num">DMs</th><th class="num">Posts</th><th class="num">Comm.</th><th class="num">Resp.</th><th class="num" title="Social media optimisation">Optim.</th><th class="num">Podcasts</th><th class="num">7 days (msg / post / comm.)</th><th class="num">Min. met</th><th class="num">Streak</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
       </section></div>
@@ -1689,15 +1707,15 @@ function minRow(icon, cls, label, value, min) {
 
 function myScoutingCard(data) {
   const t = data.entries.find((e) => e.date === data.today);
-  const v = t || { dms: 0, posts: 0, engagements: 0, podcasts: [] };
+  const v = t || { dms: 0, posts: 0, engagements: 0, responses: 0, podcasts: [] };
   const status = !t ? '<span class="pill declined">Not logged</span>' : t.metMinimum ? '<span class="pill active">Minimum met</span>' : '<span class="pill pending">Below minimum</span>';
   return `
     <section class="card">
       <div class="card-head"><h2>Today's scouting</h2>${status}</div>
-      ${minRow(ICONS.dm, 'dm', 'Scouting DMs', v.dms, data.minimum.dms)}
+      ${minRow(ICONS.dm, 'dm', 'Scouting messages', v.dms, data.minimum.dms)}
       ${minRow(ICONS.post, 'post', 'Posts', v.posts, data.minimum.posts)}
-      ${minRow(ICONS.heartSm, 'eng', 'Engagements', v.engagements, data.minimum.engagements)}
-      <div class="ds-foot"><span>🔥 <b>${data.streak}</b> day streak</span><span>Minimum met <b>${data.week.metDays}/7</b> days</span><span>${ICONS.mic} <b>${v.podcasts.length}</b> podcast${v.podcasts.length === 1 ? '' : 's'} today</span></div>
+      ${minRow(ICONS.heartSm, 'eng', 'Scouting comments', v.engagements, data.minimum.engagements)}
+      <div class="ds-foot"><span>🔥 <b>${data.streak}</b> day streak</span><span>Minimum met <b>${data.week.metDays}/7</b> days</span><span>${ICONS.reply} <b>${v.responses}</b> response${v.responses === 1 ? '' : 's'}</span><span>${ICONS.mic} <b>${v.podcasts.length}</b> podcast${v.podcasts.length === 1 ? '' : 's'} today</span></div>
       <a class="btn ${t ? 'soft' : ''} block" href="#/scouting">${t ? 'Update today’s scouting' : 'Log today’s scouting'}</a>
     </section>`;
 }
@@ -1715,7 +1733,7 @@ function teamScoutingCard(data) {
               .map(
                 (m) => `<li class="tx"><span class="avatar sm blue">${esc(initials(m.displayName))}</span>
                   <div style="min-width:0"><div class="tx-title">${esc(m.displayName)}</div>
-                  <div class="tx-sub">${m.today ? `${m.today.dms} DMs · ${m.today.posts} posts · ${m.today.engagements} engagements` : 'Not logged yet'}</div></div>
+                  <div class="tx-sub">${m.today ? `${m.today.dms} messages · ${m.today.posts} posts · ${m.today.engagements} comments · ${m.today.responses} responses` : 'Not logged yet'}</div></div>
                   ${!m.today ? '<span class="pill declined">Not yet</span>' : m.today.metMinimum ? '<span class="pill active">Met</span>' : '<span class="pill pending">Below</span>'}</li>`,
               )
               .join('')}</ul>`
@@ -1889,6 +1907,7 @@ function renderAccount() {
           <div class="error" style="margin-top:8px"></div>
         </form>
       </section></div>
+      <div class="s12"><section class="card" id="push-card"></section></div>
       <div class="s7"><section class="card">
         <div class="card-head"><h2>Change password</h2></div>
         <form id="f">
@@ -1902,6 +1921,7 @@ function renderAccount() {
         </form>
       </section></div>
     </div>`;
+  fillPushCard();
   onSubmit(app.querySelector('#email-form'), async (d) => {
     const { email } = await api('/api/me/email', { method: 'PUT', body: { email: d.email } });
     state.info.user.email = email;
@@ -1913,6 +1933,161 @@ function renderAccount() {
     await api('/api/me/password', { method: 'POST', body: d });
     app.querySelector('#f').reset();
     toast('Password updated');
+  });
+}
+
+// --- phone notifications (Web Push) ----------------------------------------
+
+const pushApi = {
+  supported: () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window,
+  ios: () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1),
+  installed: () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true,
+  async subscription() {
+    if (!pushApi.supported()) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? reg.pushManager.getSubscription() : null;
+  },
+  // 'on' | 'off' | 'blocked' | 'install' (iPhone: add to home screen first) | 'unsupported' | 'unavailable'
+  async status() {
+    if (!state.info?.pushKey) return 'unavailable';
+    if (!pushApi.supported()) return pushApi.ios() && !pushApi.installed() ? 'install' : 'unsupported';
+    if (Notification.permission === 'denied') return 'blocked';
+    return Notification.permission === 'granted' && (await pushApi.subscription()) ? 'on' : 'off';
+  },
+  label() {
+    const ua = navigator.userAgent;
+    const device = /iphone/i.test(ua) ? 'iPhone' : /ipad/i.test(ua) ? 'iPad' : /android/i.test(ua) ? 'Android phone' : /windows/i.test(ua) ? 'Windows' : /mac/i.test(ua) ? 'Mac' : 'Device';
+    const browser = /edg\//i.test(ua) ? 'Edge' : /chrome|crios/i.test(ua) ? 'Chrome' : /firefox|fxios/i.test(ua) ? 'Firefox' : /safari/i.test(ua) ? 'Safari' : 'browser';
+    return `${device} · ${browser}${pushApi.installed() ? ' app' : ''}`;
+  },
+  async enable() {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      throw new Error(permission === 'denied' ? 'Notifications are blocked for this site. Allow them in your phone or browser settings, then try again.' : 'Notifications were not allowed.');
+    }
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    const key = Uint8Array.from(atob(state.info.pushKey.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+    let sub = await reg.pushManager.getSubscription();
+    try {
+      sub = sub || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key }));
+    } catch {
+      // An old subscription made with a different key: start fresh.
+      await sub?.unsubscribe();
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    }
+    await api('/api/me/devices', { method: 'POST', body: { subscription: sub.toJSON(), label: pushApi.label() } });
+  },
+  async disable() {
+    const sub = await pushApi.subscription();
+    if (!sub) return;
+    await api('/api/me/devices', { method: 'DELETE', body: { endpoint: sub.endpoint } }).catch(() => {});
+    await sub.unsubscribe();
+  },
+};
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'open' && e.data.url) location.href = e.data.url;
+  });
+}
+
+// Once per visit, make sure the server still knows this device.
+async function refreshPushDevice() {
+  try {
+    if (sessionStorage.getItem('pm_push_synced') || (await pushApi.status()) !== 'on') return;
+    const sub = await pushApi.subscription();
+    await api('/api/me/devices', { method: 'POST', body: { subscription: sub.toJSON(), label: pushApi.label() } });
+    sessionStorage.setItem('pm_push_synced', '1');
+  } catch {}
+}
+
+const PUSH_PROMPT_KEY = 'pm_push_prompt_closed';
+// Dashboard prompt to turn on phone notifications (until they do, or close it).
+async function fillPushPrompt() {
+  const el = document.getElementById('push-prompt');
+  if (!el) return;
+  let closed = false;
+  try {
+    closed = localStorage.getItem(PUSH_PROMPT_KEY) === '1';
+  } catch {}
+  const status = await pushApi.status();
+  if (closed || !['off', 'install'].includes(status)) return;
+  el.innerHTML = `<div class="announce info push-prompt">
+      <span class="announce-ico">${ICONS.bell}</span>
+      <div class="announce-body"><div class="announce-top"><b>Get updates on your phone</b></div>
+        ${
+          status === 'install'
+            ? '<p>On iPhone, first add the app to your Home Screen: tap <b>Share</b> → <b>Add to Home Screen</b>, open Team Prime from there, then turn on notifications on the Account page.</p>'
+            : '<p>Approvals, payments, announcements and scouting reminders will pop up like a normal app notification.</p><button type="button" class="btn small" id="push-on" style="margin-top:10px">Turn on notifications</button>'
+        }
+      </div>
+      <button type="button" class="icon-btn flat" id="push-close" title="Close" aria-label="Close">${ICONS.x}</button>
+    </div>`;
+  el.querySelector('#push-close').addEventListener('click', () => {
+    try {
+      localStorage.setItem(PUSH_PROMPT_KEY, '1');
+    } catch {}
+    el.innerHTML = '';
+  });
+  el.querySelector('#push-on')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await pushApi.enable();
+      el.innerHTML = '';
+      toast('Notifications are on 🔔');
+    } catch (err) {
+      e.target.disabled = false;
+      toast(err.message);
+    }
+  });
+}
+
+async function fillPushCard() {
+  const el = document.getElementById('push-card');
+  if (!el) return;
+  const status = await pushApi.status();
+  const pill = { on: ['active', 'On'], blocked: ['declined', 'Blocked'] }[status] || ['pending', 'Off'];
+  const text = {
+    on: 'This device gets a notification when something needs you: fund requests, approvals and payments, announcements, goal comments and the evening scouting reminder. Tap one to open the app.',
+    off: 'Get a phone notification when something needs you: fund requests, approvals and payments, announcements, goal comments and the evening scouting reminder.',
+    blocked: 'Notifications are blocked for this site. Allow them in your phone or browser settings (site settings → Notifications), then come back here.',
+    install: 'On iPhone, notifications work once the app is on your Home Screen: tap <b>Share</b> → <b>Add to Home Screen</b>, open Team Prime from your Home Screen and sign in, then turn notifications on here.',
+    unsupported: "This browser can't show notifications. On Android use Chrome; on iPhone add the app to your Home Screen.",
+    unavailable: "Phone notifications aren't set up on the server yet.",
+  }[status];
+  el.innerHTML = `
+    <div class="card-head"><h2>Phone notifications</h2><span class="pill ${pill[0]}">${pill[1]}</span></div>
+    <p class="muted" style="margin:-6px 0 14px;font-size:14px">${text}</p>
+    <div class="two-btns" style="max-width:420px">
+      ${status === 'off' ? '<button type="button" class="btn" id="push-enable">Turn on notifications</button>' : ''}
+      ${status === 'on' ? '<button type="button" class="btn soft" id="push-test">Send a test</button><button type="button" class="btn outline" id="push-disable">Turn off</button>' : ''}
+    </div>
+    <div class="error" style="margin-top:8px"></div>`;
+  const err = el.querySelector('.error');
+  const run = (id, fn) =>
+    el.querySelector(id)?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      err.textContent = '';
+      try {
+        await fn();
+      } catch (x) {
+        err.textContent = x.message;
+      }
+      fillPushCard();
+    });
+  run('#push-enable', async () => {
+    await pushApi.enable();
+    toast('Notifications are on 🔔');
+  });
+  run('#push-test', async () => {
+    await api('/api/me/devices/test', { method: 'POST' });
+    toast('Test sent — check your notifications');
+  });
+  run('#push-disable', async () => {
+    await pushApi.disable();
+    toast('Notifications turned off on this device');
   });
 }
 

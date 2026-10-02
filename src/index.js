@@ -6,6 +6,7 @@ const { createApp } = require('./routes');
 const { NotionStore } = require('./store/notion');
 const { MemoryStore } = require('./store/memory');
 const { createNotifier } = require('./notify');
+const { createPusher } = require('./push');
 
 const env = process.env;
 const onVercel = Boolean(env.VERCEL);
@@ -20,6 +21,7 @@ const NOTION_IDS = {
   requestsId: env.NOTION_REQUESTS_DS || '084b9903-be69-4b80-88c8-1743432432d3',
   scoutingId: env.NOTION_SCOUTING_DS || 'e7f2cd13-28c5-48bf-83d8-6b9f4ab82500',
   goalsId: env.NOTION_GOALS_DS || 'fc460b92-796a-4c35-9517-c0c9f8223853',
+  devicesId: env.NOTION_DEVICES_DS || '745815cb-51b1-491f-90f7-433ddd3fcaaa',
 };
 
 let store;
@@ -50,6 +52,11 @@ app.use(
     sessionSecret,
     secureCookies: onVercel || env.SECURE_COOKIES === 'true',
     notifier,
+    pusher: createPusher({
+      publicKey: env.VAPID_PUBLIC_KEY,
+      privateKey: env.VAPID_PRIVATE_KEY,
+      subject: env.VAPID_SUBJECT || `mailto:${env.GMAIL_USER || 'philipsemman04@gmail.com'}`,
+    }),
     cronSecret: env.CRON_SECRET,
   }),
 );

@@ -403,6 +403,12 @@ textarea { resize: vertical; min-height: 80px; }
 .post { background: var(--gold-soft); color: #8a6212; }
 .eng { background: var(--expense-soft); color: var(--expense); }
 .podc { background: #efe9ff; color: #6d4ee6; }
+.resp { background: var(--income-soft, #e3f6ec); color: var(--income); }
+.bagc { background: #e6f4f7; color: #11788a; }
+.sparkc { background: var(--gold-soft); color: #8a6212; }
+.num-row .hint { font-size: 12px; margin-top: 6px; }
+.opt-check { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 12px; border-radius: 12px; background: #fff; font-weight: 700; color: var(--navy); cursor: pointer; }
+.opt-check input { width: 22px; height: 22px; accent-color: var(--income); margin: 0; }
 .pod-row { padding: 14px; border-radius: 16px; border: 1.5px dashed var(--border); margin-bottom: 12px; }
 .pod-row label { margin-bottom: 10px; }
 .streak { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 16px; background: linear-gradient(135deg, #fff4e0, var(--gold-soft)); margin-bottom: 18px; }
@@ -410,7 +416,7 @@ textarea { resize: vertical; min-height: 80px; }
 .streak b { display: block; font-size: 22px; font-weight: 800; color: var(--navy); }
 .streak small { color: var(--muted); }
 .mini-label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin: 6px 0 10px; }
-.stat-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(86px, 1fr)); gap: 10px; margin-bottom: 16px; }
 .stat-tiles > div { padding: 12px; border-radius: 14px; background: var(--surface-2); }
 .stat-tiles b { display: block; font-size: 22px; font-weight: 800; color: var(--navy); }
 .stat-tiles small { color: var(--muted); font-size: 12px; font-weight: 600; }
@@ -549,3 +555,7 @@ textarea { resize: vertical; min-height: 80px; }
 .topbar .mobile-cur, .mobile-only { display: none !important; }
 @media (max-width: 900px) { .mobile-only, .topbar .mobile-cur { display: inline-flex !important; } }
 @media (max-width: 900px) { .topbar .mobile-cur { display: inline-flex; } }
+
+/* ---------- phone notifications ---------- */
+#push-prompt:empty { display: none; }
+.push-prompt p { font-size: 14px; }

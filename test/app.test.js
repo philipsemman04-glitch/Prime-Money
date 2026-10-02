@@ -5,7 +5,7 @@ const { MemoryStore } = require('../src/store/memory');
 const { NotionStore } = require('../src/store/notion');
 const { createFakeNotionClient } = require('./fake-notion');
 
-const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings', requestsId: 'ds-requests', scoutingId: 'ds-scouting', goalsId: 'ds-goals' };
+const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings', requestsId: 'ds-requests', scoutingId: 'ds-scouting', goalsId: 'ds-goals', devicesId: 'ds-devices' };
 const STORES = {
   memory: () => new MemoryStore(),
   notion: () => new NotionStore({ ...IDS, client: createFakeNotionClient(IDS) }),
@@ -18,8 +18,8 @@ function scenario(name, fn) {
   }
 }
 
-async function startServer(makeStore, { fetchLiveRate = async () => 1500, notifier, cronSecret } = {}) {
-  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate, cronSecret, ...(notifier ? { notifier } : {}) });
+async function startServer(makeStore, { fetchLiveRate = async () => 1500, notifier, pusher, cronSecret } = {}) {
+  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate, cronSecret, ...(notifier ? { notifier } : {}), ...(pusher ? { pusher } : {}) });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -513,7 +513,7 @@ scenario('members log daily scouting; the admin sees the board; reminders go to 
   const long = 'x'.repeat(1400);
   let res = await ada(`/api/me/scouting/${today}`, {
     method: 'PUT',
-    body: { dms: '25', posts: 2, engagements: 40, podcasts: [{ title: 'Diary of a CEO', speaker: 'Steven Bartlett', lesson: 'Consistency beats talent' }, { title: 'My First Million', speaker: '', lesson: long }] },
+    body: { dms: '25', posts: 2, engagements: 40, responses: '4', optimised: true, orders: 'incoming', podcasts: [{ title: 'Diary of a CEO', speaker: 'Steven Bartlett', lesson: 'Consistency beats talent' }, { title: 'My First Million', speaker: '', lesson: long }] },
   });
   assert.equal(res.status, 200);
   assert.equal(res.body.entries.length, 2);
@@ -521,6 +521,10 @@ scenario('members log daily scouting; the admin sees the board; reminders go to 
   assert.deepEqual([res.body.week.dms, res.body.week.posts, res.body.week.engagements, res.body.week.podcasts], [35, 3, 60, 2]);
   const todayEntry = res.body.entries.find((e) => e.date === today);
   assert.equal(todayEntry.podcasts[1].lesson.length, 1400); // long notes survive storage
+  assert.deepEqual([todayEntry.responses, todayEntry.optimised, todayEntry.orders], [4, true, 'incoming']);
+  assert.equal(res.body.entries.find((e) => e.date === yesterday).optimised, false);
+  assert.equal(res.body.week.responses, 4);
+  assert.equal((await ada(`/api/me/scouting/${today}`, { method: 'PUT', body: { dms: 1, responses: 'many' } })).status, 400);
 
   // No reminder once logged.
   sent.length = 0;
@@ -533,6 +537,7 @@ scenario('members log daily scouting; the admin sees the board; reminders go to 
   const board = (await admin('/api/admin/scouting')).body;
   const row = board.members.find((m) => m.username === 'ada');
   assert.equal(row.today.dms, 25);
+  assert.deepEqual([row.today.responses, row.today.optimised, row.today.orders], [4, true, 'incoming']);
   assert.equal(row.streak, 2);
   assert.equal(board.members.find((m) => m.username === 'boss'), undefined); // the admin isn't a scout
   const hist = (await admin(`/api/admin/members/${row.id}/scouting`)).body;
@@ -625,4 +630,72 @@ scenario('daily scouting minimum (40 DMs, 2 posts by default) is tracked and adj
   res = await ada('/api/me/scouting');
   assert.deepEqual(res.body.minimum, { dms: 50, posts: 3, engagements: 20 });
   assert.equal(res.body.entries[0].metMinimum, false);
+});
+
+scenario('phone notifications: devices register, events reach the right people, dead devices are dropped', async (t, makeStore) => {
+  const pushes = [];
+  const dead = new Set();
+  const pusher = {
+    enabled: true,
+    publicKey: 'test-public-key',
+    async send(sub, payload) {
+      if (dead.has(sub.endpoint)) throw Object.assign(new Error('Gone'), { statusCode: 410 });
+      pushes.push({ endpoint: sub.endpoint, ...payload });
+      return { sent: true };
+    },
+  };
+  const { base, close } = await startServer(makeStore, { pusher, cronSecret: 'c' });
+  t.after(close);
+  const { admin, ada } = await teamWithMember(base);
+  const keys = { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' };
+  const adaPhone = 'https://fcm.googleapis.com/fcm/send/ada-phone';
+  const bossPhone = 'https://web.push.apple.com/boss-iphone';
+
+  assert.equal((await ada('/api/state')).body.pushKey, 'test-public-key');
+  // Only real push services are accepted.
+  assert.equal((await ada('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: 'https://evil.example/x', keys } } })).status, 400);
+  assert.equal((await ada('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: adaPhone, keys: { p256dh: 'x' } } } })).status, 400);
+  assert.equal((await ada('/api/me/devices/test', { method: 'POST' })).status, 400); // nothing registered yet
+  assert.equal((await ada('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: adaPhone, keys }, label: 'Android' } })).status, 201);
+  assert.equal((await ada('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: adaPhone, keys }, label: 'Android' } })).status, 201); // re-register is fine
+  assert.equal((await admin('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: bossPhone, keys } } })).status, 201);
+
+  assert.equal((await ada('/api/me/devices/test', { method: 'POST' })).status, 200);
+  assert.deepEqual(pushes.map((p) => p.endpoint), [adaPhone]); // one device, one push
+  pushes.length = 0;
+
+  // A fund request reaches the admin's phone; the decision reaches Ada's.
+  const bank = { bankName: 'GTBank', accountNumber: '0123456789', accountName: 'Ada Obi' };
+  await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 1000, category: 'Salary', date: teamDay() } });
+  const { body: request } = await ada('/api/me/requests', { method: 'POST', body: { pot: 'business', title: 'Laptop', items: [{ name: 'Laptop', price: 100 }], ...bank } });
+  assert.equal(pushes.length, 1);
+  assert.equal(pushes[0].endpoint, bossPhone);
+  assert.match(pushes[0].body, /Ada Obi asked for \$100\.00 from Business/);
+  assert.equal(pushes[0].url, '/#/requests');
+  pushes.length = 0;
+  await admin(`/api/admin/requests/${request.id}/decision`, { method: 'POST', body: { decision: 'decline', note: 'Not this month' } });
+  assert.equal(pushes.length, 1);
+  assert.equal(pushes[0].endpoint, adaPhone);
+  assert.match(pushes[0].title, /declined/);
+  pushes.length = 0;
+
+  // Announcements reach everyone except the author.
+  await admin('/api/admin/announcements', { method: 'POST', body: { level: 'important', message: 'Team call at 6pm' } });
+  assert.deepEqual(pushes.map((p) => [p.endpoint, p.body]), [[adaPhone, 'Team call at 6pm']]);
+  pushes.length = 0;
+
+  // Evening reminder: Ada hasn't logged, so her phone buzzes. Then her phone unsubscribes and is forgotten.
+  let r = await rawFetch(base, client(base), '/api/cron/scouting-reminder', { headers: { Authorization: 'Bearer c' } });
+  assert.equal((await r.json()).reminded, 1);
+  assert.equal(pushes[0].endpoint, adaPhone);
+  dead.add(adaPhone);
+  r = await rawFetch(base, client(base), '/api/cron/scouting-reminder', { headers: { Authorization: 'Bearer c' } });
+  assert.equal((await r.json()).reminded, 0);
+  assert.equal((await ada('/api/me/devices/test', { method: 'POST' })).status, 400); // device was removed
+
+  // Turning notifications off removes the device.
+  await admin('/api/me/devices', { method: 'DELETE', body: { endpoint: bossPhone } });
+  pushes.length = 0;
+  await ada('/api/me/goals', { method: 'POST', body: { goals: ['Close 3 clients'] } });
+  assert.equal(pushes.length, 0);
 });
