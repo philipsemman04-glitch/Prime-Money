@@ -279,7 +279,6 @@ function renderShell() {
   document.getElementById('shell').hidden = !user;
   document.getElementById('public').hidden = Boolean(user);
   app = document.getElementById(user ? 'app' : 'public');
-  document.getElementById('brand').textContent = teamName;
   if (!user) {
     document.title = teamName;
     return;
@@ -427,8 +426,8 @@ function authPage({ title, subtitle, body, foot = '' }) {
   return `
     <div class="auth">
       <section class="auth-brand">
-        <div class="logo"><img src="/logo-mark.png" alt="">${esc(state.info?.teamName || 'Team Prime')}</div>
-        <img class="hero-logo" src="/logo.jpg" alt="">
+        <img class="auth-wordmark" src="/prime-wordmark-white.svg" alt="Prime">
+        <img class="hero-logo" src="/prime-square.png" alt="">
         <div>
           <h2>Your team's money, <span>in one place.</span></h2>
           <p>Track what comes in, see your pots, and request funds — all approved by your team lead.</p>

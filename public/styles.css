@@ -60,8 +60,7 @@ h2 { font-size: 17px; font-weight: 700; }
   background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow);
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 18px; color: var(--text); }
-.brand img { border-radius: 9px; }
-.brand-text { font-weight: 800; font-size: 16px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--navy); }
+.brand-wordmark { display: block; height: 24px; width: auto; margin: 6px 0 4px 4px; }
 .side-label { padding: 14px 10px 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
 .nav { display: grid; gap: 4px; }
 .nav a {
@@ -495,8 +494,7 @@ textarea { resize: vertical; min-height: 80px; }
     radial-gradient(700px 400px at 90% 10%, rgba(242, 193, 78, 0.25), transparent 60%),
     linear-gradient(160deg, #13318a, var(--navy) 60%, #06122e);
 }
-.auth-brand .logo { display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 18px; letter-spacing: 0.04em; text-transform: uppercase; }
-.auth-brand .logo img { width: 44px; height: 44px; border-radius: 12px; }
+.auth-brand .auth-wordmark { height: 30px; width: auto; align-self: flex-start; }
 .auth-brand h2 { font-size: 40px; line-height: 1.1; font-weight: 800; max-width: 420px; }
 .auth-brand h2 span { color: var(--gold-bright); }
 .auth-brand p { color: rgba(255, 255, 255, 0.7); max-width: 400px; }

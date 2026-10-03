@@ -1,7 +1,7 @@
 {
-  "name": "Team Prime",
-  "short_name": "Team Prime",
-  "description": "Team Prime money, scouting and goals.",
+  "name": "Prime",
+  "short_name": "Prime",
+  "description": "Prime team money, scouting and goals.",
   "id": "/",
   "start_url": "/#/",
   "scope": "/",
