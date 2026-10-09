@@ -86,10 +86,16 @@ scenario('admin setup, member invite, personal data and central view', async (t,
   // Member cannot reach admin endpoints.
   assert.equal((await ada('/api/admin/overview')).status, 403);
 
-  // Member records money.
+  // Members can't record money themselves; the admin records it on their account.
   const month = new Date().toISOString().slice(0, 7);
-  await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: '1500.50', category: 'Salary', date: `${month}-01` } });
-  await ada('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 200, category: 'Food', date: `${month}-02` } });
+  r = await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 5, category: 'Salary', date: `${month}-01` } });
+  assert.equal(r.status, 403);
+  assert.match(r.body.error, /Request funds/);
+  const adaId = await memberId(admin, 'ada');
+  assert.equal((await ada(`/api/admin/members/${adaId}/transactions`, { method: 'POST', body: { type: 'income', amount: 5, category: 'Salary', date: `${month}-01` } })).status, 403);
+  r = await admin(`/api/admin/members/${adaId}/transactions`, { method: 'POST', body: { type: 'income', amount: '1500.50', category: 'Salary', date: `${month}-01` } });
+  assert.equal(r.status, 201);
+  await admin(`/api/admin/members/${adaId}/transactions`, { method: 'POST', body: { type: 'expense', amount: 200, category: 'Food', date: `${month}-02` } });
   r = await ada(`/api/me/dashboard?month=${month}`);
   assert.deepEqual([r.body.summary.income, r.body.summary.expense, r.body.summary.balance], [150050, 20000, 130050]);
 
@@ -122,9 +128,17 @@ scenario('members cannot touch each other\'s data; reset and deactivate work', a
   const ada = await join('Ada');
   const ben = await join('Ben');
 
-  const { body } = await ada('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 5, category: 'Food', date: '2026-01-05' } });
-  assert.equal((await ben(`/api/me/transactions/${body.id}`, { method: 'DELETE' })).status, 404);
+  const adaId = await memberId(admin, 'ada');
+  const benId = await memberId(admin, 'ben');
+  const { body } = await admin(`/api/admin/members/${adaId}/transactions`, { method: 'POST', body: { type: 'expense', amount: 5, category: 'Food', date: '2026-01-05' } });
+  assert.equal((await ben(`/api/me/transactions/${body.id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await ada(`/api/me/transactions/${body.id}`, { method: 'DELETE' })).status, 403); // members can't delete either
+  assert.equal((await admin(`/api/admin/members/${benId}/transactions/${body.id}`, { method: 'DELETE' })).status, 404); // wrong member
   assert.equal((await ben('/api/me/dashboard?month=2026-01')).body.transactions.length, 0);
+  assert.equal((await ada('/api/me/dashboard?month=2026-01')).body.transactions.length, 1);
+  const { body: extra } = await admin(`/api/admin/members/${adaId}/transactions`, { method: 'POST', body: { type: 'income', amount: 9, category: 'Gift', date: '2026-01-06' } });
+  assert.equal((await admin(`/api/admin/members/${adaId}/transactions/${extra.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await ada('/api/me/dashboard?month=2026-01')).body.transactions.length, 1);
 
   // Mutations without the CSRF header are rejected.
   assert.equal((await ada('/api/me/transactions', { method: 'POST', csrf: false, body: {} })).status, 403);
@@ -134,8 +148,6 @@ scenario('members cannot touch each other\'s data; reset and deactivate work', a
   assert.equal((await client(base)(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'Ada', password: 'password123' } })).status, 409);
 
   // Reset logs Ada out and lets her pick new credentials, keeping her data.
-  const overview = (await admin('/api/admin/overview?month=2026-01')).body;
-  const adaId = overview.members.find((m) => m.username === 'ada').id;
   const { body: reset } = await admin(`/api/admin/members/${adaId}/reset`, { method: 'POST' });
   assert.equal((await ada('/api/me/dashboard')).status, 401);
   const ada2 = client(base);
@@ -178,7 +190,7 @@ scenario('amounts are stored in USD; naira entries convert at the current rate',
   const ada = client(base);
   await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123' } });
   assert.equal((await ada('/api/admin/rate', { method: 'PUT', body: { rate: 1 } })).status, 403);
-  assert.equal((await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 5, currency: 'EUR', category: 'Gift', date: '2026-03-01' } })).status, 400);
+  assert.equal((await admin('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 5, currency: 'EUR', category: 'Gift', date: '2026-03-01' } })).status, 400);
 });
 
 scenario('login is throttled after repeated failures', async (t, makeStore) => {
@@ -203,9 +215,10 @@ scenario('income is split into pots; fund requests are approved or declined by t
   await ada(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ada', password: 'password123' } });
 
   // $1,000 income -> 30/30/20/20 split; a $50 expense comes out of personal by default.
-  await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 1000, category: 'Salary', date: '2026-04-01' } });
-  await ada('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 50, category: 'Food', date: '2026-04-02' } });
-  await ada('/api/me/transactions', { method: 'POST', body: { type: 'expense', amount: 20, category: 'Transport', date: '2026-04-02', pot: 'business' } });
+  const adaTx = `/api/admin/members/${await memberId(admin, 'ada')}/transactions`;
+  await admin(adaTx, { method: 'POST', body: { type: 'income', amount: 1000, category: 'Salary', date: '2026-04-01' } });
+  await admin(adaTx, { method: 'POST', body: { type: 'expense', amount: 50, category: 'Food', date: '2026-04-02' } });
+  await admin(adaTx, { method: 'POST', body: { type: 'expense', amount: 20, category: 'Transport', date: '2026-04-02', pot: 'business' } });
   let pots = (await ada('/api/me/dashboard?month=2026-04')).body.pots;
   const avail = (list) => Object.fromEntries(list.map((p) => [p.pot, p.available]));
   assert.deepEqual(avail(pots), { business: 28000, personal: 25000, savings: 20000, investment: 20000 });
@@ -252,8 +265,8 @@ scenario('income is split into pots; fund requests are approved or declined by t
   const txs = (await ada(`/api/me/dashboard?month=${month}`)).body.transactions;
   const payout = txs.find((x) => x.category === 'Fund request');
   assert.deepEqual([payout.amount, payout.pot], [17550, 'business']);
-  // The payout entry cannot be deleted by the member.
-  assert.equal((await ada(`/api/me/transactions/${payout.id}`, { method: 'DELETE' })).status, 400);
+  // The payout entry cannot be deleted, not even by the admin.
+  assert.equal((await admin(`${adaTx}/${payout.id}`, { method: 'DELETE' })).status, 400);
 
   // Decline another; cancel a third while pending.
   r = await ada('/api/me/requests', { method: 'POST', body: { pot: 'savings', items: [{ name: 'Phone', price: 300 }], ...bank } });
@@ -476,6 +489,10 @@ const teamDay = (offset = 0) => {
   return new Date(Date.parse(`${d}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
 };
 
+// A member's id, looked up by the admin.
+const memberId = async (admin, username) =>
+  (await admin(`/api/admin/overview?month=${new Date().toISOString().slice(0, 7)}`)).body.members.find((m) => m.username === username).id;
+
 async function teamWithMember(base) {
   const admin = client(base);
   await admin('/api/setup', { method: 'POST', body: { teamName: 'Team Prime', displayName: 'Boss', username: 'boss', password: 'supersecret' } });
@@ -666,7 +683,11 @@ scenario('phone notifications: devices register, events reach the right people, 
 
   // A fund request reaches the admin's phone; the decision reaches Ada's.
   const bank = { bankName: 'GTBank', accountNumber: '0123456789', accountName: 'Ada Obi' };
-  await ada('/api/me/transactions', { method: 'POST', body: { type: 'income', amount: 1000, category: 'Salary', date: teamDay() } });
+  // Income recorded by the admin reaches Ada's phone.
+  await admin(`/api/admin/members/${await memberId(admin, 'ada')}/transactions`, { method: 'POST', body: { type: 'income', amount: 1000, category: 'Salary', date: teamDay() } });
+  assert.deepEqual(pushes.map((p) => [p.endpoint, p.title]), [[adaPhone, 'Income recorded 💰']]);
+  assert.match(pushes[0].body, /\$1,000\.00 \(Salary\) was added/);
+  pushes.length = 0;
   const { body: request } = await ada('/api/me/requests', { method: 'POST', body: { pot: 'business', title: 'Laptop', items: [{ name: 'Laptop', price: 100 }], ...bank } });
   assert.equal(pushes.length, 1);
   assert.equal(pushes[0].endpoint, bossPhone);

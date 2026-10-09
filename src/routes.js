@@ -504,32 +504,34 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     if (month) res.json(await dashboardFor(store, req.user.id, month));
   });
 
-  app.post('/api/me/transactions', requireUser, async (req, res) => {
-    const { type, amount, currency = 'USD', category, note = '', date, pot = 'personal' } = req.body ?? {};
-    if (type !== 'income' && type !== 'expense') return res.status(400).json({ error: 'Type must be income or expense.' });
-    if (type === 'expense' && !POTS.includes(pot)) return res.status(400).json({ error: 'Pick which pot this came from.' });
-    if (!CURRENCIES.includes(currency)) return res.status(400).json({ error: 'Currency must be USD or NGN.' });
+  // Income and spending are recorded by the admin (for themselves or for a
+  // member). Members only see them; they ask for money with fund requests.
+  async function recordTransaction(member, body, res) {
+    const { type, amount, currency = 'USD', category, note = '', date, pot = 'personal' } = body ?? {};
+    if (type !== 'income' && type !== 'expense') return void res.status(400).json({ error: 'Type must be income or expense.' });
+    if (type === 'expense' && !POTS.includes(pot)) return void res.status(400).json({ error: 'Pick which pot this came from.' });
+    if (!CURRENCIES.includes(currency)) return void res.status(400).json({ error: 'Currency must be USD or NGN.' });
     const origCents = Math.round(Number(amount) * 100);
     if (!Number.isFinite(origCents) || origCents <= 0 || origCents > 1e14) {
-      return res.status(400).json({ error: 'Enter an amount greater than zero.' });
+      return void res.status(400).json({ error: 'Enter an amount greater than zero.' });
     }
     const allowed = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
-    if (!allowed.includes(category)) return res.status(400).json({ error: 'Pick a category.' });
+    if (!allowed.includes(category)) return void res.status(400).json({ error: 'Pick a category.' });
     if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) {
-      return res.status(400).json({ error: 'Pick a valid date.' });
+      return void res.status(400).json({ error: 'Pick a valid date.' });
     }
-    if (typeof note !== 'string' || note.length > 200) return res.status(400).json({ error: 'Note is too long.' });
+    if (typeof note !== 'string' || note.length > 200) return void res.status(400).json({ error: 'Note is too long.' });
 
     let usdCents = origCents;
     if (currency === 'NGN') {
       const { rate } = await ngnRate();
-      if (!rate) return res.status(503).json({ error: 'No USD/NGN exchange rate is available yet. Ask your admin to set one.' });
+      if (!rate) return void res.status(503).json({ error: 'No USD/NGN exchange rate is available yet. Set one on the Team page.' });
       usdCents = Math.max(1, Math.round(origCents / rate));
     }
 
     const tx = await store.createTransaction({
-      userId: req.user.id,
-      memberName: req.user.displayName,
+      userId: member.id,
+      memberName: member.displayName,
       type,
       amountCents: usdCents,
       origCurrency: currency,
@@ -539,17 +541,30 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       date,
       pot: type === 'expense' ? pot : null,
     });
-    res.status(201).json({ id: tx.id });
-  });
+    return tx;
+  }
 
-  app.delete('/api/me/transactions/:id', requireUser, async (req, res) => {
-    const tx = await store.getTransaction(req.params.id);
-    if (!tx || tx.userId !== req.user.id) return res.status(404).json({ error: 'Transaction not found.' });
+  async function removeTransaction(member, txId, res) {
+    const tx = await store.getTransaction(txId);
+    if (!tx || tx.userId !== member.id) return res.status(404).json({ error: 'Transaction not found.' });
     if (tx.category === FUND_REQUEST_CATEGORY) {
       return res.status(400).json({ error: 'Approved fund requests cannot be deleted.' });
     }
     await store.deleteTransaction(tx.id);
-    res.json({ ok: true });
+    return res.json({ ok: true });
+  }
+
+  const ADMIN_RECORDS_MONEY = 'Your team lead records income and spending. Use Request funds when you need money.';
+
+  app.post('/api/me/transactions', requireUser, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ADMIN_RECORDS_MONEY });
+    const tx = await recordTransaction(req.user, req.body, res);
+    if (tx?.id) res.status(201).json({ id: tx.id });
+  });
+
+  app.delete('/api/me/transactions/:id', requireUser, async (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ADMIN_RECORDS_MONEY });
+    await removeTransaction(req.user, req.params.id, res);
   });
 
   app.put('/api/me/email', requireUser, async (req, res) => {
@@ -1199,6 +1214,27 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     if (error) return res.status(400).json({ error });
     await store.updateUser(req.member.id, { email });
     res.json({ email });
+  });
+
+  // The admin records income (or spending) on a member's account.
+  app.post('/api/admin/members/:id/transactions', requireUser, requireAdmin, loadMember, async (req, res) => {
+    const tx = await recordTransaction(req.member, req.body, res);
+    if (!tx?.id) return;
+    if (req.member.id !== req.user.id) {
+      const amount = formatMoney(tx.amountCents, 'USD');
+      await pushTo([req.member.id], {
+        title: tx.type === 'income' ? 'Income recorded 💰' : 'Spending recorded',
+        body: tx.type === 'income'
+          ? `${amount} (${tx.category}) was added to your account and split into your pots.`
+          : `${amount} (${tx.category}) was recorded from your ${POT_LABELS[tx.pot] ?? 'Personal'} pot.`,
+        url: '/#/',
+      });
+    }
+    res.status(201).json({ id: tx.id });
+  });
+
+  app.delete('/api/admin/members/:id/transactions/:txId', requireUser, requireAdmin, loadMember, async (req, res) => {
+    await removeTransaction(req.member, req.params.txId, res);
   });
 
   app.get('/api/admin/members/:id/dashboard', requireUser, requireAdmin, loadMember, async (req, res) => {

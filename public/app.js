@@ -657,7 +657,7 @@ function latestRequestCard(r, { canRequest }) {
     </section>`;
 }
 
-function transactionsCard(txs, { editable, expanded }) {
+function transactionsCard(txs, { editable, expanded, emptyHint = '' }) {
   const list = expanded ? txs : txs.slice(0, 6);
   const rows = list.length
     ? `<ul class="tx-list">${list
@@ -676,7 +676,7 @@ function transactionsCard(txs, { editable, expanded }) {
         </li>`;
         })
         .join('')}</ul>`
-    : `<div class="empty">${ICONS.inbox}No transactions in ${esc(monthLabel(state.month))}.</div>`;
+    : `<div class="empty">${ICONS.inbox}No transactions in ${esc(monthLabel(state.month))}.${emptyHint ? `<br>${esc(emptyHint)}` : ''}</div>`;
   return `
     <section class="card">
       <div class="card-head">
@@ -727,17 +727,17 @@ function cashFlowCard(s) {
     </section>`;
 }
 
-function openAddTransaction(rerender) {
+function openAddTransaction(rerender, { endpoint = '/api/me/transactions', type: startType = 'expense', forName = '' } = {}) {
   const today = new Date();
   const inMonth = state.month === today.toISOString().slice(0, 7);
   const date = inMonth ? today.toISOString().slice(0, 10) : `${state.month}-01`;
   const symbol = displayCurrency() === 'NGN' ? '₦' : '$';
   const { el, close } = openModal(
-    'Add transaction',
+    forName ? `Add to ${forName}'s account` : 'Add transaction',
     `<form id="add">
       <div class="toggle2" role="group">
-        <button type="button" data-type="expense" class="on">Expense</button>
         <button type="button" data-type="income">Income</button>
+        <button type="button" data-type="expense">Expense</button>
       </div>
       <input type="hidden" name="type" value="expense">
       <input type="hidden" name="currency" value="${displayCurrency()}">
@@ -762,12 +762,12 @@ function openAddTransaction(rerender) {
     form.querySelector('.pot-field').hidden = type !== 'expense';
   };
   form.querySelectorAll('.toggle2 button').forEach((b) => b.addEventListener('click', () => setType(b.dataset.type)));
-  setType('expense');
+  setType(startType);
   onSubmit(form, async (d) => {
-    await api('/api/me/transactions', { method: 'POST', body: d });
+    await api(endpoint, { method: 'POST', body: d });
     state.month = d.date.slice(0, 7);
     close();
-    toast('Transaction saved');
+    toast(forName ? `Saved to ${forName}'s account${d.type === 'income' ? ' — split into their pots' : ''}` : 'Transaction saved');
     rerender();
   });
 }
@@ -813,11 +813,13 @@ async function renderDashboard() {
       <div class="s7">${balanceCard({
         title: 'My account',
         summary,
-        actions: `<div class="btn-stack"><button type="button" class="btn block" id="add-tx-2">${ICONS.plus} Add transaction</button><a class="btn soft block" href="#/requests/new">Request funds</a></div>`,
+        actions: isAdmin
+          ? `<div class="btn-stack"><button type="button" class="btn block" id="add-tx-2">${ICONS.plus} Add transaction</button><a class="btn soft block" href="#/requests/new">Request funds</a></div>`
+          : `<div class="btn-stack"><a class="btn block" href="#/requests/new">${ICONS.plus} Request funds</a></div>`,
       })}</div>
       <div class="s5">${scoutCard}</div>
       <div class="s7">${goalsCard}</div>
-      <div class="s7">${transactionsCard(transactions, { editable: true, expanded: state.expanded })}</div>
+      <div class="s7">${transactionsCard(transactions, { editable: isAdmin, expanded: state.expanded, emptyHint: isAdmin ? '' : 'Your team lead records your income here.' })}</div>
       <div class="s5">${latestRequestCard(requests[0], { canRequest: true })}</div>
       <div class="s5">${categoriesCard(summary)}</div>
       <div class="s7">${cashFlowCard(summary)}</div>
@@ -1072,8 +1074,12 @@ async function renderMemberView(id) {
     <a class="link-btn" href="#/team">${ICONS.left} Back to team</a>
     <div class="grid">
       <div class="s5">${potsCard(pots, { holder: m.displayName, userId: m.id, canRequest: false })}</div>
-      <div class="s7">${balanceCard({ title: `${m.displayName.split(' ')[0]}'s account`, summary })}</div>
-      <div class="s7">${transactionsCard(transactions, { editable: false, expanded: state.expanded })}</div>
+      <div class="s7">${balanceCard({
+        title: `${m.displayName.split(' ')[0]}'s account`,
+        summary,
+        actions: `<div class="btn-stack"><button type="button" class="btn block" id="add-income">${ICONS.plus} Add income</button><button type="button" class="btn soft block" id="add-spend">Record spending</button></div>`,
+      })}</div>
+      <div class="s7">${transactionsCard(transactions, { editable: true, expanded: state.expanded })}</div>
       <div class="s5">${categoriesCard(summary)}</div>
       ${
         isSelf
@@ -1095,6 +1101,19 @@ async function renderMemberView(id) {
   const rerender = () => renderMemberView(id);
   bindCommon(rerender);
   bindPotsCard(pots, rerender);
+  const txUrl = `/api/admin/members/${id}/transactions`;
+  const first = m.displayName.split(' ')[0];
+  app.querySelector('#add-income').addEventListener('click', () => openAddTransaction(rerender, { endpoint: txUrl, type: 'income', forName: first }));
+  app.querySelector('#add-spend').addEventListener('click', () => openAddTransaction(rerender, { endpoint: txUrl, type: 'expense', forName: first }));
+  app.querySelector('#add-tx')?.addEventListener('click', () => openAddTransaction(rerender, { endpoint: txUrl, type: 'income', forName: first }));
+  app.querySelectorAll('[data-del]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      if (!confirm(`Delete this transaction from ${first}'s account?`)) return;
+      await api(`${txUrl}/${b.dataset.del}`, { method: 'DELETE' });
+      toast('Transaction deleted');
+      rerender();
+    }),
+  );
   if (isSelf) return;
   onSubmit(app.querySelector('#member-email'), async (d) => {
     const { email } = await api(`/api/admin/members/${id}/email`, { method: 'PUT', body: { email: d.email } });
