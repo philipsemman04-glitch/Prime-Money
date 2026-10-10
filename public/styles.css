@@ -557,3 +557,13 @@ textarea { resize: vertical; min-height: 80px; }
 /* ---------- phone notifications ---------- */
 #push-prompt:empty { display: none; }
 .push-prompt p { font-size: 14px; }
+
+/* ---------- admin comment on goals ---------- */
+.goal-comment { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: start; padding: 14px 16px; margin-bottom: 16px; border-radius: 16px; background: var(--gold-soft); border-left: 5px solid var(--gold-bright, #f2b632); }
+.goal-comment .gc-ico { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: #fff; color: #8a6212; }
+.goal-comment .gc-top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.goal-comment .gc-top b { font-size: 14px; color: var(--navy); }
+.goal-comment .gc-top span { font-size: 12px; color: var(--muted); }
+.goal-comment p { margin: 6px 0 0; font-size: 15px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.goal-comment.banner-style { margin-bottom: 0; box-shadow: var(--shadow); background: linear-gradient(135deg, #fff8e6, var(--gold-soft)); padding: 16px 18px; }
+.goal-comment .gc-actions { margin-top: 12px; }

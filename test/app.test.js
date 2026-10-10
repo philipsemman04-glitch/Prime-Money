@@ -610,8 +610,19 @@ scenario('monthly goals: add (not edit/delete), tick off, carry over, admin sees
   sent.length = 0;
   assert.equal((await ada('/api/admin/goals/comment', { method: 'PUT', body: { userId: mine.id, month, comment: 'x' } })).status, 403);
   await admin('/api/admin/goals/comment', { method: 'PUT', body: { userId: mine.id, month, comment: 'Great start — push on the clients.' } });
-  assert.equal((await ada(`/api/me/goals?month=${month}`)).body.comment, 'Great start — push on the clients.');
+  const withComment = (await ada(`/api/me/goals?month=${month}`)).body;
+  assert.equal(withComment.comment, 'Great start — push on the clients.');
+  assert.equal(withComment.commentBy, 'Boss');
+  assert.ok(withComment.commentAt);
   assert.equal(sent[0].to, 'ada@example.com');
+  // The latest comment comes with the app state so the dashboard can highlight it.
+  const latest = (await ada('/api/state')).body.goalComment;
+  assert.deepEqual([latest.month, latest.text, latest.by], [month, 'Great start — push on the clients.', 'Boss']);
+  assert.equal((await admin('/api/state')).body.goalComment, undefined);
+  // Clearing the comment removes it everywhere.
+  await admin('/api/admin/goals/comment', { method: 'PUT', body: { userId: mine.id, month, comment: '' } });
+  assert.equal((await ada('/api/state')).body.goalComment, null);
+  assert.equal((await ada(`/api/me/goals?month=${month}`)).body.commentBy, '');
   // Goal comments don't leak into team settings.
   assert.equal((await ada('/api/state')).body.teamName, 'Team Prime');
 });
@@ -713,6 +724,17 @@ scenario('phone notifications: devices register, events reach the right people, 
   r = await rawFetch(base, client(base), '/api/cron/scouting-reminder', { headers: { Authorization: 'Bearer c' } });
   assert.equal((await r.json()).reminded, 0);
   assert.equal((await ada('/api/me/devices/test', { method: 'POST' })).status, 400); // device was removed
+
+  // A comment on Ada's goals pops up on her phone, with who wrote it.
+  dead.delete(adaPhone);
+  await ada('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: adaPhone, keys } } });
+  pushes.length = 0;
+  await admin('/api/admin/goals/comment', { method: 'PUT', body: { userId: await memberId(admin, 'ada'), month: teamDay().slice(0, 7), comment: 'Push harder on outreach' } });
+  assert.equal(pushes.length, 1);
+  assert.equal(pushes[0].endpoint, adaPhone);
+  assert.match(pushes[0].title, /^💬 Boss commented on your .+ goals$/);
+  assert.equal(pushes[0].body, 'Push harder on outreach');
+  assert.equal(pushes[0].url, '/#/goals');
 
   // Turning notifications off removes the device.
   await admin('/api/me/devices', { method: 'DELETE', body: { endpoint: bossPhone } });

@@ -328,9 +328,26 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     };
   }
 
+  // The admin's comment on a member's goals for a month, with who wrote it and when.
+  async function goalComment(userId, month) {
+    const [text, rawMeta] = await Promise.all([store.getSetting(`goal_comment:${userId}:${month}`), store.getSetting(`goal_comment_meta:${userId}:${month}`)]);
+    if (!text) return null;
+    let meta = {};
+    try {
+      meta = JSON.parse(rawMeta || '{}');
+    } catch {}
+    return { month, text, at: meta.at || null, by: meta.by || '' };
+  }
+
   async function goalsFor(userId, month) {
-    const [goals, comment] = await Promise.all([store.listGoals({ userId, month }), store.getSetting(`goal_comment:${userId}:${month}`)]);
-    return { month, goals: goals.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).map(publicGoal), comment: comment || '' };
+    const [goals, c] = await Promise.all([store.listGoals({ userId, month }), goalComment(userId, month)]);
+    return {
+      month,
+      goals: goals.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).map(publicGoal),
+      comment: c?.text || '',
+      commentAt: c?.at || null,
+      commentBy: c?.by || '',
+    };
   }
 
   // --- middleware -------------------------------------------------------
@@ -391,6 +408,10 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       announcements: req.user ? (await store.listAnnouncements()).sort(byNewest).slice(0, 10) : [],
       scoutingMinimum: req.user ? await scoutingMinimum() : undefined,
       pushKey: req.user ? pusher.publicKey : undefined,
+      goalComment:
+        req.user && req.user.role !== 'admin'
+          ? (await goalComment(req.user.id, dayIn().slice(0, 7))) || (await goalComment(req.user.id, shiftMonth(dayIn().slice(0, 7), -1)))
+          : undefined,
       pendingRequests: pending ? pending.length : undefined,
       ...(req.user?.role === 'admin'
         ? {
@@ -963,9 +984,18 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const member = await store.getUser(String(userId ?? ''));
     if (!member) return res.status(404).json({ error: 'Member not found.' });
     const key = `goal_comment:${member.id}:${month}`;
-    if (comment) await store.setSetting(key, comment);
-    else await store.deleteSetting(key);
-    if (comment) await pushTo([member.id], { title: 'Comment on your goals', body: comment.slice(0, 180), url: '/#/goals' });
+    const metaKey = `goal_comment_meta:${member.id}:${month}`;
+    const by = req.user.displayName.split(' ')[0];
+    if (comment) {
+      await store.setSetting(key, comment);
+      await store.setSetting(metaKey, JSON.stringify({ at: new Date().toISOString(), by }));
+    } else {
+      await store.deleteSetting(key);
+      await store.deleteSetting(metaKey);
+    }
+    if (comment) {
+      await pushTo([member.id], { title: `💬 ${by} commented on your ${monthName(month)} goals`, body: comment.slice(0, 180), url: '/#/goals', tag: `goal-comment-${month}` });
+    }
     if (comment && member.email) {
       const teamName = (await store.getSetting('team_name')) || 'Team Prime';
       await sendQuietly('Goal comment', {

@@ -158,6 +158,38 @@ function dismissAnnouncement(id) {
 }
 const unseenAnnouncements = () => (state.info?.announcements || []).filter((a) => !dismissedIds().has(a.id));
 
+// The admin's latest comment on this member's goals, until they've read it.
+const goalCommentId = (c) => `${c.month}:${c.at || c.text}`;
+function unreadGoalComment() {
+  const c = state.info?.goalComment;
+  if (!c) return null;
+  try {
+    return localStorage.getItem('pm_goal_comment_seen') === goalCommentId(c) ? null : c;
+  } catch {
+    return c;
+  }
+}
+function markGoalCommentRead() {
+  const c = state.info?.goalComment;
+  if (!c) return;
+  try {
+    localStorage.setItem('pm_goal_comment_seen', goalCommentId(c));
+  } catch {}
+}
+
+// A highlighted comment box, used on the dashboard and the Goals page.
+function goalCommentBox({ text, by, at, month }, { banner = false } = {}) {
+  return `<div class="goal-comment ${banner ? 'banner-style' : ''}">
+    <span class="gc-ico">${ICONS.dm}</span>
+    <div class="gc-body">
+      <div class="gc-top"><b>${esc(by || 'Your team lead')} commented on your ${esc(monthLabel(month))} goals</b>${at ? `<span>${esc(formatDateTime(at))}</span>` : ''}</div>
+      <p>${esc(text)}</p>
+      ${banner ? '<div class="gc-actions"><a class="btn small" href="#/goals" id="gc-open">View my goals</a></div>' : ''}
+    </div>
+    ${banner ? `<button type="button" class="icon-btn flat" id="gc-close" title="Mark as read" aria-label="Mark as read">${ICONS.x}</button>` : ''}
+  </div>`;
+}
+
 const LEVEL_META = {
   info: { label: 'Announcement', cls: 'info' },
   important: { label: 'Important', cls: 'important' },
@@ -311,7 +343,7 @@ function renderShell() {
 
   // Bell: pending requests for the admin, unread announcements for members.
   const bell = document.getElementById('bell');
-  const unread = isAdmin ? pending : unseenAnnouncements().length;
+  const unread = isAdmin ? pending : unseenAnnouncements().length + (unreadGoalComment() ? 1 : 0);
   bell.href = isAdmin ? '#/requests' : '#/';
   bell.setAttribute('aria-label', isAdmin ? 'Fund requests' : 'Announcements');
   bell.innerHTML = `${ICONS.bell}${unread ? `<span class="badge">${unread}</span>` : ''}`;
@@ -409,14 +441,17 @@ setInterval(async () => {
   try {
     const before = state.info.pendingRequests || 0;
     const knownIds = new Set((state.info.announcements || []).map((a) => a.id));
+    const prevComment = state.info.goalComment ? goalCommentId(state.info.goalComment) : null;
     const next = await api('/api/state');
     if (!next.user) return;
     state.info = next;
     const fresh = (next.announcements || []).filter((a) => !knownIds.has(a.id));
+    const newComment = next.goalComment && goalCommentId(next.goalComment) !== prevComment && unreadGoalComment();
     if ((next.pendingRequests || 0) > before) toast('New fund request waiting for you');
+    else if (newComment) toast(`💬 ${next.goalComment.by || 'Your team lead'} commented on your goals`);
     else if (fresh.length) toast(`New announcement: ${fresh[0].message.slice(0, 80)}`);
     renderShell();
-    if (fresh.length && (location.hash || '#/') === '#/') renderDashboard();
+    if ((fresh.length || newComment) && (location.hash || '#/') === '#/') renderDashboard();
   } catch {}
 }, 60_000);
 
@@ -807,6 +842,7 @@ async function renderDashboard() {
   const scoutCard = !scouting ? '' : isAdmin ? teamScoutingCard(scouting) : myScoutingCard(scouting);
   app.innerHTML = `
     ${announcementsHtml()}
+    ${!isAdmin && unreadGoalComment() ? goalCommentBox(unreadGoalComment(), { banner: true }) : ''}
     <div id="push-prompt"></div>
     <div class="grid">
       <div class="s5">${potsCard(pots, { holder: u.displayName, userId: u.id, canRequest: true })}</div>
@@ -826,6 +862,12 @@ async function renderDashboard() {
     </div>`;
   bindCommon(renderDashboard);
   bindAnnouncements(renderDashboard);
+  app.querySelector('#gc-open')?.addEventListener('click', markGoalCommentRead);
+  app.querySelector('#gc-close')?.addEventListener('click', () => {
+    markGoalCommentRead();
+    renderShell();
+    renderDashboard();
+  });
   fillPushPrompt();
   bindPotsCard(pots, renderDashboard);
   bindGoalChecks(renderDashboard);
@@ -1766,6 +1808,7 @@ function myGoalsCard(data) {
   return `
     <section class="card">
       <div class="card-head"><h2>My goals · ${esc(monthLabel(data.month, true))}</h2><a class="link-btn" href="#/goals">${data.goals.length ? 'View all' : ''}</a></div>
+      ${data.comment ? goalCommentBox({ text: data.comment, by: data.commentBy, at: data.commentAt, month: data.month }) : ''}
       ${
         data.goals.length
           ? `${progressBar(data.goals)}<div style="margin-top:14px">${goalList(shown, { editable: true })}</div>
@@ -1816,13 +1859,17 @@ function bindGoalChecks(rerender) {
 async function renderMyGoals() {
   setTitle('Goals', 'Your monthly goals');
   const data = await api(`/api/me/goals?month=${state.month}`);
+  if (data.comment && state.info.goalComment?.month === data.month) {
+    markGoalCommentRead();
+    renderShell();
+  }
   app.innerHTML = `
     <div class="grid">
       <div class="s7"><section class="card">
         <div class="card-head"><h2>${esc(monthLabel(state.month))}</h2>${monthNav()}</div>
+        ${data.comment ? goalCommentBox({ text: data.comment, by: data.commentBy, at: data.commentAt, month: data.month }) : ''}
         ${progressBar(data.goals)}
         <div style="margin-top:18px">${goalList(data.goals, { editable: true })}</div>
-        ${data.comment ? `<div class="note-box" style="margin-top:16px"><b style="color:var(--text)">Comment from your admin:</b> ${esc(data.comment)}</div>` : ''}
       </section></div>
       <div class="s5">
         ${
