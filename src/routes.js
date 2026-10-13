@@ -649,8 +649,28 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       if (!lesson || lesson.length > 1500) return res.status(400).json({ error: `Write what you learnt from "${title}".` });
       podcasts.push({ title, speaker, lesson });
     }
+    const [before] = await store.listScouting({ userId: req.user.id, from: date, to: date });
     await store.saveScouting({ userId: req.user.id, memberName: req.user.displayName, date, dms, posts, engagements, responses, optimised, orders, podcasts });
-    res.json(await scoutingFor(req.user.id));
+    const result = await scoutingFor(req.user.id);
+
+    // Tell the admin straight away. Sent before replying: on Vercel, work after
+    // the response can be cut off.
+    if (req.user.role !== 'admin') {
+      const first = req.user.displayName.split(' ')[0];
+      const met = metMinimum({ dms, posts, engagements }, result.minimum);
+      const verb = date !== today ? "fixed yesterday's scouting" : before ? 'updated their scouting' : 'logged their scouting';
+      const parts = [`${dms} messages`, `${engagements} comments`, `${posts} posts`, `${responses} responses`];
+      if (podcasts.length) parts.push(`${podcasts.length} podcast${podcasts.length > 1 ? 's' : ''}`);
+      if (optimised) parts.push('optimised ✓');
+      if (orders) parts.push(`orders: ${orders.slice(0, 40)}`);
+      await pushTo(await adminIds(), {
+        title: `${met ? '✅' : '📝'} ${first} ${verb}`,
+        body: `${parts.join(' · ')}${met ? ' — minimum met' : ' — below the minimum'}`,
+        url: `/#/scouting/${req.user.id}`,
+        tag: `scouting-${req.user.id}-${date}`,
+      });
+    }
+    res.json(result);
   });
 
   // --- phone notifications ----------------------------------------------

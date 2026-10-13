@@ -725,6 +725,25 @@ scenario('phone notifications: devices register, events reach the right people, 
   assert.equal((await r.json()).reminded, 0);
   assert.equal((await ada('/api/me/devices/test', { method: 'POST' })).status, 400); // device was removed
 
+  // When Ada logs scouting, the admin's phone hears about it straight away.
+  pushes.length = 0;
+  await ada(`/api/me/scouting/${teamDay()}`, { method: 'PUT', body: { dms: 20, posts: 1, engagements: 10, responses: 2 } });
+  assert.deepEqual(pushes.map((p) => [p.endpoint, p.title]), [[bossPhone, '📝 Ada logged their scouting']]);
+  assert.equal(pushes[0].body, '20 messages · 10 comments · 1 posts · 2 responses — below the minimum');
+  assert.match(pushes[0].url, /^\/#\/scouting\//);
+  const tag = pushes[0].tag;
+  pushes.length = 0;
+  await ada(`/api/me/scouting/${teamDay()}`, { method: 'PUT', body: { dms: 42, posts: 3, engagements: 40, responses: 4, optimised: true, orders: 'incoming', podcasts: [{ title: 'Beat procrastination', speaker: 'Myron Golden', lesson: 'Change how you see the pain.' }] } });
+  assert.equal(pushes[0].title, '✅ Ada updated their scouting');
+  assert.equal(pushes[0].body, '42 messages · 40 comments · 3 posts · 4 responses · 1 podcast · optimised ✓ · orders: incoming — minimum met');
+  assert.equal(pushes[0].tag, tag); // replaces the earlier notification instead of stacking
+  pushes.length = 0;
+  await ada(`/api/me/scouting/${teamDay(-1)}`, { method: 'PUT', body: { dms: 5 } });
+  assert.equal(pushes[0].title, "📝 Ada fixed yesterday's scouting");
+  pushes.length = 0;
+  await admin(`/api/me/scouting/${teamDay()}`, { method: 'PUT', body: { dms: 5 } });
+  assert.equal(pushes.length, 0); // the admin's own scouting doesn't notify anyone
+
   // A comment on Ada's goals pops up on her phone, with who wrote it.
   dead.delete(adaPhone);
   await ada('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: adaPhone, keys } } });
