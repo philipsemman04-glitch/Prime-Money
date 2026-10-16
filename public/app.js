@@ -404,7 +404,35 @@ document.getElementById('logout').addEventListener('click', async () => {
 async function boot() {
   state.info = await api('/api/state');
   route();
+  finishIntro();
   if (state.info.user) refreshPushDevice();
+}
+
+// Opening animation (markup in index.html): once the app is ready, greet the
+// person by name, then fade away to reveal the page underneath.
+function finishIntro() {
+  const el = document.getElementById('intro');
+  if (!el || el.dataset.done) return;
+  el.dataset.done = '1';
+  const first = state.info?.user?.displayName?.split(' ')[0] || '';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const elapsed = performance.now() - (window.__introStart || 0);
+  let gone = false;
+  const leave = () => {
+    if (gone) return;
+    gone = true;
+    el.classList.add('out');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#eef1f6');
+    setTimeout(() => el.remove(), 450);
+  };
+  el.addEventListener('click', leave); // tap to skip
+  // The logo animation takes about 1.7s; the greeting follows it.
+  setTimeout(() => {
+    if (!first) return leave();
+    document.getElementById('intro-name').textContent = first;
+    el.classList.add('greet');
+    setTimeout(leave, reduce ? 700 : 1200);
+  }, reduce ? 0 : Math.max(0, 1700 - elapsed));
 }
 
 function route() {

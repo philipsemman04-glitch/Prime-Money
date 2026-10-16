@@ -567,3 +567,41 @@ textarea { resize: vertical; min-height: 80px; }
 .goal-comment p { margin: 6px 0 0; font-size: 15px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .goal-comment.banner-style { margin-bottom: 0; box-shadow: var(--shadow); background: linear-gradient(135deg, #fff8e6, var(--gold-soft)); padding: 16px 18px; }
 .goal-comment .gc-actions { margin-top: 12px; }
+
+/* ---------- opening animation ---------- */
+#intro { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; padding: 24px; background: radial-gradient(120% 90% at 50% 45%, #0d2fa8 0%, #071a6b 55%, #030a33 100%); color: #fff; cursor: pointer; transition: opacity 0.45s ease, transform 0.45s ease; }
+#intro.out { opacity: 0; transform: scale(1.04); pointer-events: none; }
+.intro-stage { display: grid; justify-items: center; width: 100%; }
+.intro-mark { width: min(78vw, 420px); height: auto; overflow: visible; }
+/* 1. The P rolls in from the left and lands in the middle. */
+.intro-mark .il-p { transform-box: fill-box; transform-origin: center; animation: intro-roll 0.85s cubic-bezier(0.25, 0.9, 0.3, 1.05) 0.1s both; }
+/* 2. The word slides left into place while R-I-M-E come out from behind the P. */
+.intro-mark .intro-shift { transform: translateX(203px); animation: intro-shift 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.95s forwards; }
+.intro-mark .il { transform: translateX(-70px); animation: intro-out 0.65s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.intro-mark .il-r { animation-delay: 0.95s; }
+.intro-mark .il-i { animation-delay: 1s; }
+.intro-mark .il-m { animation-delay: 1.05s; }
+.intro-mark .il-e { animation-delay: 1.1s; }
+/* 3. The gold M glows once everything has landed. */
+.intro-mark .il-m path { animation: intro-glow 0.9s ease-out 1.6s both; }
+/* 4. "Welcome back, <name>" fades up. */
+.intro-greet { margin-top: 30px; text-align: center; opacity: 0; transform: translateY(12px); transition: opacity 0.45s ease, transform 0.45s ease; min-height: 64px; }
+.intro-greet span { display: block; font-size: 15px; font-weight: 600; letter-spacing: 0.04em; color: rgba(255, 255, 255, 0.72); }
+.intro-greet b { display: block; margin-top: 4px; font-size: clamp(26px, 7vw, 34px); font-weight: 800; color: var(--gold-bright, #f2c14e); }
+#intro.greet .intro-greet { opacity: 1; transform: none; }
+@keyframes intro-roll {
+  0% { transform: translateX(-560px) rotate(-540deg) scale(0.55); opacity: 0; }
+  15% { opacity: 1; }
+  75% { transform: translateX(12px) rotate(10deg) scale(1.03); }
+  100% { transform: none; opacity: 1; }
+}
+@keyframes intro-shift { to { transform: translateX(0); } }
+@keyframes intro-out { to { transform: translateX(0); } }
+@keyframes intro-glow {
+  0% { filter: brightness(1); }
+  35% { filter: brightness(1.45) drop-shadow(0 0 10px rgba(255, 210, 110, 0.9)); }
+  100% { filter: brightness(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .intro-mark .il-p, .intro-mark .intro-shift, .intro-mark .il, .intro-mark .il-m path { animation: none; transform: none; }
+}
