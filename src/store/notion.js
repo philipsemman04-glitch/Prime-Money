@@ -243,9 +243,10 @@ class NotionStore {
     for (const p of pages) {
       const key = readText(p.properties['Key']) ?? '';
       const value = readText(p.properties['Value']);
-      // Announcements are Settings rows titled "announcement · <level>".
-      const m = key.match(/^announcement · (.+)$/);
-      if (m) announcements.push({ id: p.id, level: m[1], message: value ?? '', createdAt: p.created_time });
+      // Announcements are Settings rows titled "announcement · <level>", or
+      // "announcement · <level> · <member id>" when sent to one person.
+      const m = key.match(/^announcement · (.+?)(?: · ([\w-]+))?$/);
+      if (m) announcements.push({ id: p.id, level: m[1], message: value ?? '', createdAt: p.created_time, to: m[2] ?? null });
       else map.set(key, { pageId: p.id, value });
     }
     this.settingsCache = { at: Date.now(), map, announcements };
@@ -257,13 +258,13 @@ class NotionStore {
     return this.settingsCache.announcements.map((a) => ({ ...a }));
   }
 
-  async createAnnouncement({ level, message }) {
+  async createAnnouncement({ level, message, to = null }) {
     const page = await this.notion.pages.create({
       parent: { type: 'data_source_id', data_source_id: this.ids.settings },
-      properties: { Key: { title: text(`announcement · ${level}`) }, Value: { rich_text: text(message) } },
+      properties: { Key: { title: text(`announcement · ${level}${to ? ` · ${to}` : ''}`) }, Value: { rich_text: text(message) } },
     });
     this.settingsCache = null;
-    return { id: page.id, level, message, createdAt: page.created_time };
+    return { id: page.id, level, message, createdAt: page.created_time, to };
   }
 
   // --- devices that get phone notifications ---

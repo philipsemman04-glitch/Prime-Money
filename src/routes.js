@@ -405,7 +405,14 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     res.json({
       allocation: parseAllocation(rawAllocation),
       pots: POTS,
-      announcements: req.user ? (await store.listAnnouncements()).sort(byNewest).slice(0, 10) : [],
+      // Members see team-wide announcements plus the ones sent to them; the
+      // admin sees everything (the dashboard only shows theirs).
+      announcements: req.user
+        ? (await store.listAnnouncements())
+            .filter((a) => req.user.role === 'admin' || !a.to || a.to === req.user.id)
+            .sort(byNewest)
+            .slice(0, req.user.role === 'admin' ? 30 : 10)
+        : [],
       scoutingMinimum: req.user ? await scoutingMinimum() : undefined,
       pushKey: req.user ? pusher.publicKey : undefined,
       goalComment:
@@ -1156,10 +1163,20 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     if (!message) return res.status(400).json({ error: 'Write a message first.' });
     if (message.length > 500) return res.status(400).json({ error: 'Keep it under 500 characters.' });
     if (!LEVELS.includes(level)) return res.status(400).json({ error: 'Pick a type for the announcement.' });
-    const created = await store.createAnnouncement({ level, message });
-    const others = (await store.listUsers()).filter((u) => u.status === 'active' && u.id !== req.user.id).map((u) => u.id);
-    const heading = { info: '📢 Announcement', important: '⚠️ Important', 'good news': '🎉 Good news' }[level];
-    await pushTo(others, { title: heading, body: message.slice(0, 180), url: '/#/', tag: `announcement-${created.id}` });
+    // Optional: send it to one member only.
+    const users = await store.listUsers();
+    let to = null;
+    if (req.body?.to) {
+      const member = users.find((u) => u.id === String(req.body.to) && u.status !== 'deactivated');
+      if (!member || member.id === req.user.id) return res.status(400).json({ error: 'Pick who should get this message.' });
+      to = member.id;
+    }
+    const created = await store.createAnnouncement({ level, message, to });
+    const recipients = to ? [to] : users.filter((u) => u.status === 'active' && u.id !== req.user.id).map((u) => u.id);
+    const heading = to
+      ? `💬 Message from ${req.user.displayName.split(' ')[0]}`
+      : { info: '📢 Announcement', important: '⚠️ Important', 'good news': '🎉 Good news' }[level];
+    await pushTo(recipients, { title: heading, body: message.slice(0, 180), url: '/#/', tag: `announcement-${created.id}` });
     res.status(201).json(created);
   });
 

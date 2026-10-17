@@ -156,7 +156,9 @@ function dismissAnnouncement(id) {
     localStorage.setItem('pm_dismissed', JSON.stringify([...ids].slice(-200)));
   } catch {}
 }
-const unseenAnnouncements = () => (state.info?.announcements || []).filter((a) => !dismissedIds().has(a.id));
+// Team-wide announcements plus any sent just to this person (the admin's list also has other people's).
+const myAnnouncements = () => (state.info?.announcements || []).filter((a) => !a.to || a.to === state.info?.user?.id);
+const unseenAnnouncements = () => myAnnouncements().filter((a) => !dismissedIds().has(a.id));
 
 // The admin's latest comment on this member's goals, until they've read it.
 const goalCommentId = (c) => `${c.month}:${c.at || c.text}`;
@@ -204,7 +206,7 @@ function announcementsHtml() {
       const meta = LEVEL_META[a.level] || LEVEL_META.info;
       return `<div class="announce ${meta.cls}">
         <span class="announce-ico">${ICONS.megaphone}</span>
-        <div class="announce-body"><div class="announce-top"><b>${meta.label}</b><span>${esc(formatDateTime(a.createdAt))}</span></div><p>${esc(a.message)}</p></div>
+        <div class="announce-body"><div class="announce-top"><b>${a.to ? 'Message for you' : meta.label}</b>${a.to ? '<span class="tag gold">Only you can see this</span>' : ''}<span>${esc(formatDateTime(a.createdAt))}</span></div><p>${esc(a.message)}</p></div>
         <button type="button" class="icon-btn flat" data-dismiss="${esc(a.id)}" title="Dismiss" aria-label="Dismiss">${ICONS.x}</button>
       </div>`;
     })
@@ -264,10 +266,10 @@ function bindMonthNav(rerender) {
 
 // --- modal ----------------------------------------------------------------
 
-function openModal(title, body) {
+function openModal(title, body, { sheet = false, sticky = false } = {}) {
   const root = document.getElementById('modal-root');
   root.innerHTML = `
-    <div class="overlay" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="overlay ${sheet ? 'sheet' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="modal">
         <div class="modal-head"><h2>${esc(title)}</h2><button type="button" class="icon-btn flat" data-close aria-label="Close">${ICONS.x}</button></div>
         ${body}
@@ -280,8 +282,9 @@ function openModal(title, body) {
   };
   const onKey = (e) => e.key === 'Escape' && close();
   document.addEventListener('keydown', onKey);
+  // sticky: only the close/cancel buttons close it, so a stray tap can't lose what was typed.
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay || e.target.closest('[data-close]')) close();
+    if ((e.target === overlay && !sticky) || e.target.closest('[data-close]')) close();
   });
   const first = overlay.querySelector('input, select, textarea');
   if (first) setTimeout(() => first.focus(), 30);
@@ -899,6 +902,7 @@ async function renderDashboard() {
   fillPushPrompt();
   bindPotsCard(pots, renderDashboard);
   bindGoalChecks(renderDashboard);
+  app.querySelector('#log-scout')?.addEventListener('click', () => openScoutingForm(scouting, scouting.today, renderDashboard));
   const add = () => openAddTransaction(renderDashboard);
   app.querySelector('#add-tx')?.addEventListener('click', add);
   app.querySelector('#add-tx-2')?.addEventListener('click', add);
@@ -975,13 +979,17 @@ async function renderTeam() {
         </table></div>
       </section></div>
       <div class="s12"><section class="card">
-        <div class="card-head"><h2>Announcements</h2><span class="sub">Shown at the top of everyone's dashboard</span></div>
+        <div class="card-head"><h2>Announcements</h2><span class="sub">Shown at the top of the dashboard, for everyone or for one person</span></div>
         <div class="grid" style="gap:20px">
           <form id="announce" class="s6">
             <label>Message <textarea name="message" rows="3" maxlength="500" required placeholder="e.g. Salaries will be paid on Friday."></textarea></label>
             <div class="inline-form">
+              <label>Send to <select name="to"><option value="">Everyone</option>${data.members
+                .filter((m) => m.role !== 'admin' && m.status !== 'deactivated')
+                .map((m) => `<option value="${esc(m.id)}">${esc(m.displayName)}${m.status === 'invited' ? ' (not joined yet)' : ''}</option>`)
+                .join('')}</select></label>
               <label>Type <select name="level"><option value="info">Announcement</option><option value="important">Important</option><option value="good news">Good news</option></select></label>
-              <button class="btn navy" type="submit">${ICONS.megaphone} Post to everyone</button>
+              <button class="btn navy" type="submit" id="announce-btn">${ICONS.megaphone} Post to everyone</button>
             </div>
             <div class="error" style="margin-top:8px"></div>
           </form>
@@ -991,7 +999,8 @@ async function renderTeam() {
                 ? `<div class="ann-list">${state.info.announcements
                     .map((a) => {
                       const meta = LEVEL_META[a.level] || LEVEL_META.info;
-                      return `<div class="ann-row"><span class="tag ${meta.cls}">${meta.label}</span><div><p>${esc(a.message)}</p><small>${esc(formatDateTime(a.createdAt))}</small></div><button type="button" class="btn soft small" data-unpost="${esc(a.id)}">Remove</button></div>`;
+                      const who = a.to ? data.members.find((m) => m.id === a.to)?.displayName || 'one member' : '';
+                      return `<div class="ann-row"><span class="tag ${meta.cls}">${meta.label}</span><div><p>${esc(a.message)}</p><small>${who ? `To ${esc(who)} only · ` : 'Everyone · '}${esc(formatDateTime(a.createdAt))}</small></div><button type="button" class="btn soft small" data-unpost="${esc(a.id)}">Remove</button></div>`;
                     })
                     .join('')}</div>`
                 : `<div class="empty" style="padding:18px 0">${ICONS.megaphone.replace('width="20" height="20"', 'width="28" height="28"')}No announcements yet.</div>`
@@ -1084,15 +1093,21 @@ async function renderTeam() {
       e.target.disabled = false;
     }
   });
-  onSubmit(app.querySelector('#announce'), async (d) => {
-    const a = await api('/api/admin/announcements', { method: 'POST', body: d });
+  const annForm = app.querySelector('#announce');
+  const nameOf = (id) => data.members.find((m) => m.id === id)?.displayName.split(' ')[0];
+  annForm.elements.to.addEventListener('change', () => {
+    const who = nameOf(annForm.elements.to.value);
+    app.querySelector('#announce-btn').innerHTML = `${ICONS.megaphone} ${who ? `Send to ${esc(who)}` : 'Post to everyone'}`;
+  });
+  onSubmit(annForm, async (d) => {
+    const a = await api('/api/admin/announcements', { method: 'POST', body: { message: d.message, level: d.level, to: d.to || null } });
     state.info.announcements = [a, ...state.info.announcements];
-    toast('Announcement posted to everyone');
+    toast(a.to ? `Message sent to ${nameOf(a.to)}` : 'Announcement posted to everyone');
     renderTeam();
   });
   app.querySelectorAll('[data-unpost]').forEach((b) =>
     b.addEventListener('click', async () => {
-      if (!confirm('Remove this announcement for everyone?')) return;
+      if (!confirm('Remove this announcement?')) return;
       await api(`/api/admin/announcements/${b.dataset.unpost}`, { method: 'DELETE' });
       state.info.announcements = state.info.announcements.filter((a) => a.id !== b.dataset.unpost);
       toast('Announcement removed');
@@ -1592,55 +1607,72 @@ function scoutingHistory(entries, title = 'History') {
     </section>`;
 }
 
-async function renderMyScouting(day) {
+async function renderMyScouting() {
   setTitle('Scouting', 'Log your outreach and learning every day');
   const data = await api('/api/me/scouting');
   const yesterday = shiftDay(data.today, -1);
-  day = day === yesterday ? yesterday : data.today;
-  const entry = data.entries.find((e) => e.date === day) || { dms: '', posts: '', engagements: '', responses: '', optimised: false, orders: '', podcasts: [] };
+  const t = data.entries.find((e) => e.date === data.today);
+  const y = data.entries.find((e) => e.date === yesterday);
+  const v = t || { dms: 0, posts: 0, engagements: 0, responses: 0, optimised: false, orders: '', podcasts: [] };
+  const status = !t ? '<span class="pill declined">Not logged yet</span>' : t.metMinimum ? '<span class="pill active">Minimum met</span>' : '<span class="pill pending">Below minimum</span>';
 
   app.innerHTML = `
     <div class="grid">
       <div class="s7"><section class="card">
-        <div class="card-head">
-          <h2>${day === data.today ? "Today's scouting" : "Yesterday's scouting"}</h2>
-          <div class="seg">
-            <button type="button" data-day="${data.today}" class="${day === data.today ? 'on' : ''}">Today</button>
-            <button type="button" data-day="${yesterday}" class="${day === yesterday ? 'on' : ''}">Yesterday</button>
-          </div>
+        <div class="card-head"><h2>Today's scouting</h2>${status}</div>
+        <p class="muted" style="margin:-8px 0 14px;font-size:13px">${esc(prettyDay(data.today, { weekday: 'long', day: 'numeric', month: 'long' }))}</p>
+        ${minRow(ICONS.dm, 'dm', 'Scouting messages', v.dms, data.minimum.dms)}
+        ${minRow(ICONS.post, 'post', 'Social media posts', v.posts, data.minimum.posts)}
+        ${minRow(ICONS.heartSm, 'eng', 'Scouting comments', v.engagements, data.minimum.engagements)}
+        <div class="ds-foot">
+          <span>${ICONS.reply} <b>${v.responses ?? 0}</b> responses</span>
+          <span>${ICONS.mic} <b>${v.podcasts.length}</b> podcast${v.podcasts.length === 1 ? '' : 's'}</span>
+          <span>${ICONS.spark} Optimisation <b>${v.optimised ? 'done' : '—'}</b></span>
+          ${v.orders ? `<span>${ICONS.bag} Orders: <b>${esc(v.orders)}</b></span>` : ''}
         </div>
-        <p class="muted" style="margin:-8px 0 12px;font-size:13px">${esc(prettyDay(day, { weekday: 'long', day: 'numeric', month: 'long' }))}${data.entries.some((e) => e.date === day) ? ' · saved — you can update it' : ''}</p>
-        <div class="min-note">${ICONS.target} Daily minimum: <b>${data.minimum.dms} scouting messages</b>, <b>${data.minimum.posts} posts</b> and <b>${data.minimum.engagements} scouting comments</b></div>
-        <form id="scout">
-          <div class="num-row">
-            <label><span class="num-ico dm">${ICONS.dm}</span>Scouting messages (DMs)<input name="dms" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.dms)}">
-              <span class="min-bar" data-min="dms"><span class="min-track"><span></span></span><small></small></span></label>
-            <label><span class="num-ico post">${ICONS.post}</span>Social media posts<input name="posts" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.posts)}">
-              <span class="min-bar" data-min="posts"><span class="min-track"><span></span></span><small></small></span></label>
-            <label><span class="num-ico eng">${ICONS.heartSm}</span>Scouting comments<input name="engagements" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.engagements)}">
-              <span class="min-bar" data-min="engagements"><span class="min-track"><span></span></span><small></small></span></label>
-          </div>
-          <div class="num-row">
-            <label><span class="num-ico resp">${ICONS.reply}</span>Responses<input name="responses" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.responses ?? '')}">
-              <small class="muted hint">People who replied to you</small></label>
-            <label><span class="num-ico bagc">${ICONS.bag}</span>Orders<input name="orders" maxlength="300" placeholder="e.g. incoming, 2 closed" value="${esc(entry.orders ?? '')}" style="font-size:16px;font-weight:600">
-              <small class="muted hint">Any orders today</small></label>
-            <label class="opt-box"><span class="num-ico sparkc">${ICONS.spark}</span>Social media optimisation
-              <span class="opt-check"><input name="optimised" type="checkbox" ${entry.optimised ? 'checked' : ''}><span>Done today</span></span></label>
-          </div>
-          <div class="card-head" style="margin:8px 0 12px"><h2 style="font-size:15px">${ICONS.mic} Podcasts watched</h2></div>
-          <div id="pods"></div>
-          <button type="button" class="btn soft small" id="add-pod">${ICONS.plus} Add podcast</button>
-          <div class="error" style="margin-top:12px"></div>
-          <button class="btn block" type="submit">Save scouting</button>
-        </form>
+        <button type="button" class="btn block big-log" id="log-today">${ICONS.plus} ${t ? 'Update today’s scouting' : 'Log today’s scouting'}</button>
+        <button type="button" class="link-btn" id="log-yesterday" style="margin:12px auto 0;display:flex">${y ? 'Edit yesterday’s scouting' : 'Forgot yesterday? Log it here'}</button>
       </section></div>
       <div class="s5">${scoutingStatsCard(data)}</div>
       <div class="s12">${scoutingHistory(data.entries, 'Your scouting history')}</div>
     </div>`;
+  app.querySelector('#log-today').addEventListener('click', () => openScoutingForm(data, data.today, renderMyScouting));
+  app.querySelector('#log-yesterday').addEventListener('click', () => openScoutingForm(data, yesterday, renderMyScouting));
+}
 
+// The scouting form, in a pop-up (a bottom sheet on phones).
+function openScoutingForm(data, day, onSaved) {
+  const entry = data.entries.find((e) => e.date === day) || { dms: '', posts: '', engagements: '', responses: '', optimised: false, orders: '', podcasts: [] };
+  const isToday = day === data.today;
+  const { el, close } = openModal(
+    isToday ? 'Today’s scouting' : 'Yesterday’s scouting',
+    `<p class="muted" style="margin:-10px 0 14px;font-size:13px">${esc(prettyDay(day, { weekday: 'long', day: 'numeric', month: 'long' }))}${data.entries.some((e) => e.date === day) ? ' · already saved — you can update it' : ''}</p>
+     <div class="min-note">${ICONS.target}<span>Daily minimum: <b>${data.minimum.dms} messages</b>, <b>${data.minimum.engagements} comments</b>, <b>${data.minimum.posts} posts</b></span></div>
+     <form id="scout">
+       <div class="num-row">
+         <label><span class="num-ico dm">${ICONS.dm}</span>Scouting messages (DMs)<input name="dms" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.dms)}">
+           <span class="min-bar" data-min="dms"><span class="min-track"><span></span></span><small></small></span></label>
+         <label><span class="num-ico eng">${ICONS.heartSm}</span>Scouting comments<input name="engagements" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.engagements)}">
+           <span class="min-bar" data-min="engagements"><span class="min-track"><span></span></span><small></small></span></label>
+         <label><span class="num-ico post">${ICONS.post}</span>Social media posts<input name="posts" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.posts)}">
+           <span class="min-bar" data-min="posts"><span class="min-track"><span></span></span><small></small></span></label>
+         <label><span class="num-ico resp">${ICONS.reply}</span>Responses<input name="responses" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${esc(entry.responses ?? '')}">
+           <small class="muted hint">People who replied to you</small></label>
+         <label><span class="num-ico bagc">${ICONS.bag}</span>Orders<input name="orders" maxlength="300" placeholder="e.g. incoming, 2 closed" value="${esc(entry.orders ?? '')}" style="font-size:16px;font-weight:600">
+           <small class="muted hint">Any orders today</small></label>
+         <label class="opt-box"><span class="num-ico sparkc">${ICONS.spark}</span>Social media optimisation
+           <span class="opt-check"><input name="optimised" type="checkbox" ${entry.optimised ? 'checked' : ''}><span>Done</span></span></label>
+       </div>
+       <div class="card-head" style="margin:8px 0 12px"><h2 style="font-size:15px">${ICONS.mic} Podcasts watched</h2></div>
+       <div id="pods"></div>
+       <button type="button" class="btn soft small" id="add-pod">${ICONS.plus} Add podcast</button>
+       <div class="error" style="margin-top:12px"></div>
+       <div class="sheet-actions"><button type="button" class="btn outline" data-close>Cancel</button><button class="btn" type="submit">Save scouting</button></div>
+     </form>`,
+    { sheet: true, sticky: true },
+  );
+  const form = el.querySelector('#scout');
   // Live progress towards the daily minimum.
-  const form = app.querySelector('#scout');
   const updateMins = () => {
     for (const key of ['dms', 'posts', 'engagements']) {
       const val = Number(form.elements[key].value) || 0;
@@ -1654,33 +1686,37 @@ async function renderMyScouting(day) {
   };
   form.addEventListener('input', updateMins);
   updateMins();
-  const pods = app.querySelector('#pods');
+  const pods = el.querySelector('#pods');
   const addPod = (p = {}) => {
     const row = document.createElement('div');
     row.className = 'pod-row';
     row.innerHTML = `
       <div class="row2">
-        <label>Podcast / episode <input class="p-title" maxlength="150" placeholder="e.g. Diary of a CEO" value="${esc(p.title || '')}"></label>
-        <label>Who was speaking <input class="p-speaker" maxlength="100" placeholder="e.g. Alex Hormozi" value="${esc(p.speaker || '')}"></label>
+        <label>Podcast / episode <input class="p-title" maxlength="150" placeholder="e.g. Beat procrastination" value="${esc(p.title || '')}"></label>
+        <label>Who was speaking <input class="p-speaker" maxlength="100" placeholder="e.g. Myron Golden" value="${esc(p.speaker || '')}"></label>
       </div>
       <label>What did you learn? <textarea class="p-lesson" rows="3" maxlength="1500" placeholder="The key lessons you took away">${esc(p.lesson || '')}</textarea></label>
       <button type="button" class="link-btn remove-pod" style="color:var(--expense)">${ICONS.trash} Remove</button>`;
     row.querySelector('.remove-pod').addEventListener('click', () => row.remove());
     pods.appendChild(row);
+    return row;
   };
-  (entry.podcasts.length ? entry.podcasts : []).forEach(addPod);
-  app.querySelector('#add-pod').addEventListener('click', () => addPod());
-  app.querySelectorAll('[data-day]').forEach((b) => b.addEventListener('click', () => renderMyScouting(b.dataset.day)));
-  onSubmit(app.querySelector('#scout'), async (d) => {
+  entry.podcasts.forEach(addPod);
+  el.querySelector('#add-pod').addEventListener('click', () => addPod().querySelector('.p-title').focus());
+  onSubmit(form, async (d) => {
     const podcasts = [...pods.querySelectorAll('.pod-row')].map((r) => ({
       title: r.querySelector('.p-title').value,
       speaker: r.querySelector('.p-speaker').value,
       lesson: r.querySelector('.p-lesson').value,
     }));
-    await api(`/api/me/scouting/${day}`, { method: 'PUT', body: { dms: d.dms, posts: d.posts, engagements: d.engagements, responses: d.responses, orders: d.orders, optimised: form.elements.optimised.checked, podcasts } });
+    await api(`/api/me/scouting/${day}`, {
+      method: 'PUT',
+      body: { dms: d.dms, posts: d.posts, engagements: d.engagements, responses: d.responses, orders: d.orders, optimised: form.elements.optimised.checked, podcasts },
+    });
     const met = ['dms', 'posts', 'engagements'].every((k) => Number(d[k]) >= data.minimum[k]);
+    close();
     toast(met ? 'Scouting saved — minimum met 💪' : 'Saved — still below the daily minimum');
-    renderMyScouting(day);
+    onSaved();
   });
 }
 
@@ -1804,7 +1840,7 @@ function myScoutingCard(data) {
       ${minRow(ICONS.post, 'post', 'Posts', v.posts, data.minimum.posts)}
       ${minRow(ICONS.heartSm, 'eng', 'Scouting comments', v.engagements, data.minimum.engagements)}
       <div class="ds-foot"><span>🔥 <b>${data.streak}</b> day streak</span><span>Minimum met <b>${data.week.metDays}/7</b> days</span><span>${ICONS.reply} <b>${v.responses}</b> response${v.responses === 1 ? '' : 's'}</span><span>${ICONS.mic} <b>${v.podcasts.length}</b> podcast${v.podcasts.length === 1 ? '' : 's'} today</span></div>
-      <a class="btn ${t ? 'soft' : ''} block" href="#/scouting">${t ? 'Update today’s scouting' : 'Log today’s scouting'}</a>
+      <button type="button" class="btn ${t ? 'soft' : ''} block" id="log-scout">${t ? 'Update today’s scouting' : 'Log today’s scouting'}</button>
     </section>`;
 }
 

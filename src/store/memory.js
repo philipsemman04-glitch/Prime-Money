@@ -69,8 +69,8 @@ class MemoryStore {
     return [...this.announcements.values()].map((a) => ({ ...a }));
   }
 
-  async createAnnouncement({ level, message }) {
-    const a = { id: crypto.randomUUID(), level, message, createdAt: new Date().toISOString() };
+  async createAnnouncement({ level, message, to = null }) {
+    const a = { id: crypto.randomUUID(), level, message, createdAt: new Date().toISOString(), to };
     this.announcements.set(a.id, a);
     return { ...a };
   }

@@ -420,6 +420,23 @@ scenario('the admin posts announcements that every member sees', async (t, makeS
   assert.equal((await admin(`/api/admin/announcements/${a1.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await admin(`/api/admin/announcements/${a1.id}`, { method: 'DELETE' })).status, 404);
   assert.deepEqual((await ada('/api/state')).body.announcements.map((a) => a.message), ['Submit receipts by the 5th']);
+
+  // A message for one person only: Ada sees it, Ben doesn't.
+  const { body: inv2 } = await admin('/api/admin/members', { method: 'POST', body: { displayName: 'Ben' } });
+  const ben = client(base);
+  await ben(`/api/invite/${inv2.inviteToken}`, { method: 'POST', body: { username: 'ben', password: 'password123' } });
+  const adaId = (await ada('/api/state')).body.user.id;
+  const bossId = (await admin('/api/state')).body.user.id;
+  assert.equal((await admin('/api/admin/announcements', { method: 'POST', body: { message: 'x', to: 'nobody' } })).status, 400);
+  assert.equal((await admin('/api/admin/announcements', { method: 'POST', body: { message: 'x', to: bossId } })).status, 400);
+  const { body: dm } = await admin('/api/admin/announcements', { method: 'POST', body: { message: 'Ada, see me after the call', level: 'important', to: adaId } });
+  assert.equal(dm.to, adaId);
+  const adaSees = (await ada('/api/state')).body.announcements;
+  assert.deepEqual(adaSees.map((a) => [a.message, a.to]), [['Ada, see me after the call', adaId], ['Submit receipts by the 5th', null]]);
+  assert.deepEqual((await ben('/api/state')).body.announcements.map((a) => a.message), ['Submit receipts by the 5th']);
+  assert.equal((await admin('/api/state')).body.announcements.length, 2); // the admin sees everything they sent
+  assert.equal((await admin(`/api/admin/announcements/${dm.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await ada('/api/state')).body.announcements.length, 1);
 });
 
 scenario('members get emails when their request is approved, paid or declined', async (t, makeStore) => {
@@ -714,6 +731,10 @@ scenario('phone notifications: devices register, events reach the right people, 
   // Announcements reach everyone except the author.
   await admin('/api/admin/announcements', { method: 'POST', body: { level: 'important', message: 'Team call at 6pm' } });
   assert.deepEqual(pushes.map((p) => [p.endpoint, p.body]), [[adaPhone, 'Team call at 6pm']]);
+  pushes.length = 0;
+  // A private message goes to that person's phone only, with who it's from.
+  await admin('/api/admin/announcements', { method: 'POST', body: { message: 'Well done this week', to: await memberId(admin, 'ada') } });
+  assert.deepEqual(pushes.map((p) => [p.endpoint, p.title, p.body]), [[adaPhone, '💬 Message from Boss', 'Well done this week']]);
   pushes.length = 0;
 
   // Evening reminder: Ada hasn't logged, so her phone buzzes. Then her phone unsubscribes and is forgotten.

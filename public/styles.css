@@ -605,3 +605,14 @@ textarea { resize: vertical; min-height: 80px; }
 @media (prefers-reduced-motion: reduce) {
   .intro-mark .il-p, .intro-mark .intro-shift, .intro-mark .il, .intro-mark .il-m path { animation: none; transform: none; }
 }
+
+/* ---------- pop-up sheet (scouting form) ---------- */
+.overlay.sheet .modal { max-width: 640px; padding-bottom: 0; }
+.sheet-actions { position: sticky; bottom: 0; display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin: 16px -26px 0; padding: 14px 26px calc(14px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--border); }
+.big-log { margin-top: 18px; padding: 16px; font-size: 16px; }
+@media (max-width: 640px) {
+  .overlay.sheet { padding: 0; place-items: end stretch; }
+  .overlay.sheet .modal { max-width: none; max-height: 94dvh; border-radius: 24px 24px 0 0; padding: 22px 18px 0; animation: sheet-up 0.22s ease-out; }
+  .overlay.sheet .sheet-actions { margin: 16px -18px 0; padding-left: 18px; padding-right: 18px; }
+}
+@keyframes sheet-up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
