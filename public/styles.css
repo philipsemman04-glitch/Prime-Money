@@ -616,3 +616,41 @@ textarea { resize: vertical; min-height: 80px; }
   .overlay.sheet .sheet-actions { margin: 16px -18px 0; padding-left: 18px; padding-right: 18px; }
 }
 @keyframes sheet-up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ---------- incentives ---------- */
+.pill.info-pill { background: var(--blue-soft); color: var(--blue); }
+.pill.muted-pill { background: var(--surface-2); color: var(--muted); }
+.inc-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.inc-summary > div { display: grid; justify-items: center; gap: 2px; padding: 16px 10px; border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+.inc-summary span { font-size: 24px; }
+.inc-summary b { font-size: 26px; font-weight: 800; color: var(--navy); }
+.inc-summary small { color: var(--muted); font-weight: 600; font-size: 12px; }
+.inc-h { font-size: 17px; margin: 6px 4px 12px; }
+.inc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.inc-card { display: flex; flex-direction: column; gap: 8px; }
+.inc-card h3 { margin: 0; font-size: 16px; color: var(--navy); }
+.inc-top { display: flex; justify-content: space-between; align-items: center; }
+.inc-ico { font-size: 26px; }
+.inc-reward { font-size: 22px; font-weight: 800; color: #b07a12; line-height: 1.2; }
+.inc-desc { margin: 0; color: var(--muted); font-size: 14px; }
+.inc-target { font-size: 14px; color: var(--text); }
+.inc-progress { margin-top: 2px; }
+.inc-track { height: 10px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.inc-track span { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #2563eb, #60a5fa); }
+.inc-track span.won { background: linear-gradient(90deg, #f0a92a, #ffd76e); }
+.inc-nums { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.inc-nums b { color: var(--navy); }
+.inc-wonbox { padding: 10px 12px; border-radius: 12px; background: #fff; font-size: 13px; color: var(--text); }
+.inc-foot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: auto; padding-top: 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.inc-card.is-won { background: linear-gradient(160deg, #fff8e6, var(--gold-soft)); border: 1px solid #f3dca0; }
+.is-missed { opacity: 0.7; }
+.inc-members { display: grid; gap: 10px; }
+.inc-mrow { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 14px; background: var(--surface-2); }
+.inc-mname { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.inc-mname b { font-size: 14px; }
+.paid-toggle { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; font-weight: 700; color: var(--navy); white-space: nowrap; cursor: pointer; }
+.paid-toggle input { width: 18px; height: 18px; accent-color: var(--income); margin: 0; }
+@media (max-width: 640px) {
+  .inc-mrow { grid-template-columns: auto 1fr; }
+  .inc-mact { grid-column: 1 / -1; justify-self: end; }
+}

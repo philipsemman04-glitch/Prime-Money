@@ -782,3 +782,81 @@ scenario('phone notifications: devices register, events reach the right people, 
   await ada('/api/me/goals', { method: 'POST', body: { goals: ['Close 3 clients'] } });
   assert.equal(pushes.length, 0);
 });
+
+scenario('incentives: progress is tracked automatically, wins are recorded and announced', async (t, makeStore) => {
+  const pushes = [];
+  const pusher = { enabled: true, publicKey: 'k', async send(sub, payload) { pushes.push({ endpoint: sub.endpoint, ...payload }); return { sent: true }; } };
+  const { base, close } = await startServer(makeStore, { pusher });
+  t.after(close);
+  const { admin, ada } = await teamWithMember(base);
+  const keys = { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' };
+  await ada('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/ada', keys } } });
+  await admin('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/boss', keys } } });
+  const adaId = await memberId(admin, 'ada');
+  const today = teamDay();
+  const start = teamDay(-3);
+  const end = teamDay(10);
+
+  // Validation and permissions.
+  assert.equal((await ada('/api/admin/incentives', { method: 'POST', body: {} })).status, 403);
+  assert.equal((await admin('/api/admin/incentives', { method: 'POST', body: { title: 'x', reward: 'y', metric: 'nope', target: 1, start, end } })).status, 400);
+  assert.equal((await admin('/api/admin/incentives', { method: 'POST', body: { title: 'x', reward: 'y', metric: 'messages', target: 0, start, end } })).status, 400);
+  assert.equal((await admin('/api/admin/incentives', { method: 'POST', body: { title: 'x', reward: 'y', metric: 'messages', target: 5, start: end, end: start } })).status, 400);
+
+  pushes.length = 0;
+  const { body: streak } = await admin('/api/admin/incentives', { method: 'POST', body: { title: '3-day streak', reward: '₦10,000', metric: 'scout_streak', target: 3, start, end } });
+  assert.deepEqual(pushes.map((p) => [p.endpoint, p.title]), [['https://fcm.googleapis.com/fcm/send/ada', '🎁 New incentive: 3-day streak']]);
+  const { body: cash } = await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Big earner', reward: 'Dinner', metric: 'income', target: 500, start, end } });
+  const { body: spirit } = await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Team spirit', reward: 'Shout-out', metric: 'manual', start, end } });
+  await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Next month push', reward: 'Bonus', metric: 'messages', target: 100, start: teamDay(20), end: teamDay(40) } });
+
+  let mine = (await ada('/api/incentives')).body.incentives;
+  assert.deepEqual(mine.map((i) => [i.title, i.status]), [['3-day streak', 'available'], ['Big earner', 'available'], ['Team spirit', 'available'], ['Next month push', 'upcoming']]);
+  assert.equal(mine[1].target, 50000); // dollars are stored in cents
+
+  // Two days hitting the minimum: in progress.
+  const full = { dms: 40, posts: 2, engagements: 40 };
+  await ada(`/api/me/scouting/${teamDay(-1)}`, { method: 'PUT', body: full });
+  pushes.length = 0;
+  await ada(`/api/me/scouting/${today}`, { method: 'PUT', body: full });
+  mine = (await ada('/api/incentives')).body.incentives;
+  assert.deepEqual([mine[0].progress, mine[0].status], [2, 'in_progress']);
+  assert.equal(pushes.filter((p) => p.title.includes('unlocked')).length, 0);
+
+  // The admin records income that crosses the target: Ada unlocks it, both phones hear.
+  pushes.length = 0;
+  await admin(`/api/admin/members/${adaId}/transactions`, { method: 'POST', body: { type: 'income', amount: 600, category: 'Business', date: today } });
+  const wins = pushes.filter((p) => p.title.includes('unlocked'));
+  assert.deepEqual(wins.map((p) => [p.endpoint, p.title]).sort(), [
+    ['https://fcm.googleapis.com/fcm/send/ada', '🏆 You unlocked: Big earner'],
+    ['https://fcm.googleapis.com/fcm/send/boss', '🏆 Ada unlocked Big earner'],
+  ]);
+  mine = (await ada('/api/incentives')).body.incentives;
+  const big = mine.find((i) => i.id === cash.id);
+  assert.equal(big.status, 'won');
+  assert.ok(big.wonAt);
+  assert.deepEqual(big.winners.map((w) => w.name), ['Ada Obi']);
+  // Only announced once.
+  pushes.length = 0;
+  await ada('/api/incentives');
+  assert.equal(pushes.length, 0);
+
+  // Manual award and marking the reward as given.
+  assert.equal((await admin(`/api/admin/incentives/${spirit.id}/paid`, { method: 'POST', body: { userId: adaId } })).status, 400);
+  await admin(`/api/admin/incentives/${spirit.id}/award`, { method: 'POST', body: { userId: adaId } });
+  await admin(`/api/admin/incentives/${cash.id}/paid`, { method: 'POST', body: { userId: adaId } });
+  mine = (await ada('/api/incentives')).body.incentives;
+  assert.equal(mine.find((i) => i.id === spirit.id).status, 'won');
+  assert.equal(mine.find((i) => i.id === cash.id).paid, true);
+
+  // The admin's view has everyone's progress.
+  const adminView = (await admin('/api/incentives')).body.incentives.find((i) => i.id === streak.id);
+  assert.deepEqual(adminView.members.map((m) => [m.name, m.progress, m.status]), [['Ada Obi', 2, 'in_progress']]);
+
+  // Edit and delete.
+  assert.equal((await admin(`/api/admin/incentives/${streak.id}`, { method: 'PUT', body: { title: '2-day streak', reward: '₦10,000', metric: 'scout_streak', target: 2, start, end } })).status, 200);
+  assert.equal((await ada('/api/incentives')).body.incentives.find((i) => i.id === streak.id).status, 'won');
+  assert.equal((await admin(`/api/admin/incentives/${cash.id}`, { method: 'DELETE' })).status, 200);
+  mine = (await ada('/api/incentives')).body.incentives;
+  assert.equal(mine.some((i) => i.id === cash.id), false);
+});

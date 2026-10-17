@@ -13,6 +13,7 @@ const {
   POT_LABELS,
 } = require('./notify');
 const { createPusher } = require('./push');
+const { METRICS, progressOf, statusOf, cleanIncentive } = require('./incentives');
 
 // Browsers' push services. Devices may only register endpoints on these hosts.
 const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'push.apple.com', 'notify.windows.com'];
@@ -659,6 +660,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const [before] = await store.listScouting({ userId: req.user.id, from: date, to: date });
     await store.saveScouting({ userId: req.user.id, memberName: req.user.displayName, date, dms, posts, engagements, responses, optimised, orders, podcasts });
     const result = await scoutingFor(req.user.id);
+    if (req.user.role !== 'admin') await checkIncentives(req.user.id);
 
     // Tell the admin straight away. Sent before replying: on Vercel, work after
     // the response can be cut off.
@@ -779,6 +781,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const goal = await store.getGoal(req.params.id);
     if (!goal || goal.userId !== req.user.id) return res.status(404).json({ error: 'Goal not found.' });
     await store.setGoalDone(goal.id, req.body.done);
+    if (req.body.done && req.user.role !== 'admin') await checkIncentives(req.user.id);
     res.json({ ok: true });
   });
 
@@ -1064,6 +1067,169 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     res.json({ date: today, reminded: reached.size, emailed, alreadyLogged: logged.size });
   });
 
+  // --- incentives ----------------------------------------------------------
+  // Definitions live in the "incentives" setting (a JSON list); each win is its
+  // own setting "incentive_win:<incentive id>:<member id>" = { at, paid }.
+
+  const winKey = (incId, userId) => `incentive_win:${incId}:${userId}`;
+  async function loadIncentives() {
+    try {
+      return JSON.parse((await store.getSetting('incentives')) || '[]');
+    } catch {
+      return [];
+    }
+  }
+  const saveIncentives = (list) => store.setSetting('incentives', JSON.stringify(list));
+  async function loadWins() {
+    const wins = new Map(); // "<incId>:<userId>" -> { at, paid }
+    for (const { key, value } of await store.listSettings('incentive_win:')) {
+      try {
+        wins.set(key.slice('incentive_win:'.length), JSON.parse(value));
+      } catch {}
+    }
+    return wins;
+  }
+  const SCOUT_METRICS = new Set(['scout_days', 'scout_streak', 'messages', 'comments', 'posts', 'responses', 'podcasts']);
+
+  async function announceWin(inc, member) {
+    const first = member.displayName.split(' ')[0];
+    await pushTo([member.id], { title: `🏆 You unlocked: ${inc.title}`, body: `Reward: ${inc.reward}`, url: '/#/incentives', tag: `incentive-${inc.id}` });
+    await pushTo(await adminIds(), { title: `🏆 ${first} unlocked ${inc.title}`, body: `Reward: ${inc.reward}`, url: '/#/incentives', tag: `incentive-${inc.id}-${member.id}` });
+  }
+
+  // Everyone's progress on every incentive. New automatic wins are recorded and
+  // announced here, so it runs after members log things and when the page opens.
+  async function evaluateIncentives({ onlyUserId } = {}) {
+    const today = dayIn();
+    const [incentives, users, wins, min] = await Promise.all([loadIncentives(), store.listUsers(), loadWins(), scoutingMinimum()]);
+    const members = users
+      .filter((u) => u.role !== 'admin' && u.status === 'active' && (!onlyUserId || u.id === onlyUserId))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+    const progress = new Map(); // "<incId>:<userId>" -> number
+    if (incentives.length && members.length) {
+      const metrics = new Set(incentives.map((i) => i.metric));
+      const from = incentives.reduce((m, i) => (i.start < m ? i.start : m), incentives[0].start);
+      const to = incentives.reduce((m, i) => (i.end > m ? i.end : m), incentives[0].end);
+      const [scouting, goals, txs] = await Promise.all([
+        [...metrics].some((m) => SCOUT_METRICS.has(m)) ? store.listScouting({ userId: onlyUserId, from, to }) : [],
+        metrics.has('goals_done') ? store.listGoals({ userId: onlyUserId }) : [],
+        metrics.has('income') ? store.listTransactions({ userId: onlyUserId }) : [],
+      ]);
+      const met = (e) => metMinimum(e, min);
+      for (const m of members) {
+        const data = {
+          scouting: scouting.filter((e) => e.userId === m.id),
+          goals: goals.filter((g) => g.userId === m.id),
+          transactions: txs.filter((t) => t.userId === m.id),
+        };
+        for (const inc of incentives) {
+          const value = progressOf(inc, data, met);
+          progress.set(`${inc.id}:${m.id}`, value);
+          const k = `${inc.id}:${m.id}`;
+          if (inc.metric !== 'manual' && !wins.has(k) && value >= inc.target && today >= inc.start) {
+            const win = { at: new Date().toISOString(), paid: false };
+            wins.set(k, win);
+            await store.setSetting(winKey(inc.id, m.id), JSON.stringify(win));
+            await announceWin(inc, m);
+          }
+        }
+      }
+    }
+    return { today, incentives, members, users, wins, progress };
+  }
+  // Quietly check one member after they log something; never fails the caller.
+  const checkIncentives = (userId) => evaluateIncentives({ onlyUserId: userId }).catch((err) => console.error('Incentive check failed:', err.message));
+
+  const daysLeft = (inc, today) => Math.round((Date.parse(inc.end) - Date.parse(today)) / 86400000);
+
+  app.get('/api/incentives', requireUser, async (req, res) => {
+    const isAdmin = req.user.role === 'admin';
+    const { today, incentives, members, users, wins, progress } = await evaluateIncentives({});
+    const nameOf = (id) => users.find((u) => u.id === id)?.displayName || 'Someone';
+    const list = incentives.map((inc) => {
+      const winners = [...wins.entries()]
+        .filter(([k]) => k.startsWith(`${inc.id}:`))
+        .map(([k, w]) => ({ id: k.slice(inc.id.length + 1), name: nameOf(k.slice(inc.id.length + 1)), at: w.at, paid: Boolean(w.paid) }))
+        .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      const base = { ...inc, metricLabel: METRICS[inc.metric].label, unit: METRICS[inc.metric].unit, money: Boolean(METRICS[inc.metric].money), daysLeft: daysLeft(inc, today), winners: winners.map(({ name, at }) => ({ name, at })) };
+      if (isAdmin) {
+        return {
+          ...base,
+          members: members.map((m) => {
+            const w = wins.get(`${inc.id}:${m.id}`);
+            const value = progress.get(`${inc.id}:${m.id}`) ?? 0;
+            return { id: m.id, name: m.displayName, progress: value, status: statusOf(inc, { won: Boolean(w), progress: value, today }), wonAt: w?.at || null, paid: Boolean(w?.paid) };
+          }),
+        };
+      }
+      const w = wins.get(`${inc.id}:${req.user.id}`);
+      const value = progress.get(`${inc.id}:${req.user.id}`) ?? 0;
+      return { ...base, progress: value, status: statusOf(inc, { won: Boolean(w), progress: value, today }), wonAt: w?.at || null, paid: Boolean(w?.paid) };
+    });
+    res.json({ today, metrics: Object.fromEntries(Object.entries(METRICS).map(([k, v]) => [k, v.label])), incentives: list });
+  });
+
+  app.post('/api/admin/incentives', requireUser, requireAdmin, async (req, res) => {
+    const { incentive, error } = cleanIncentive(req.body, dayIn());
+    if (error) return res.status(400).json({ error });
+    const list = await loadIncentives();
+    if (list.length >= 50) return res.status(400).json({ error: 'That is a lot of incentives — remove some old ones first.' });
+    const created = { id: auth.randomToken().slice(0, 12), ...incentive, createdAt: new Date().toISOString() };
+    await saveIncentives([...list, created]);
+    const everyone = (await store.listUsers()).filter((u) => u.role !== 'admin' && u.status === 'active').map((u) => u.id);
+    await pushTo(everyone, { title: `🎁 New incentive: ${created.title}`, body: `Reward: ${created.reward}`, url: '/#/incentives', tag: `incentive-new-${created.id}` });
+    res.status(201).json(created);
+  });
+
+  app.put('/api/admin/incentives/:id', requireUser, requireAdmin, async (req, res) => {
+    const list = await loadIncentives();
+    const i = list.findIndex((x) => x.id === req.params.id);
+    if (i < 0) return res.status(404).json({ error: 'Incentive not found.' });
+    const { incentive, error } = cleanIncentive(req.body, list[i].start);
+    if (error) return res.status(400).json({ error });
+    list[i] = { ...list[i], ...incentive };
+    await saveIncentives(list);
+    res.json(list[i]);
+  });
+
+  app.delete('/api/admin/incentives/:id', requireUser, requireAdmin, async (req, res) => {
+    const list = await loadIncentives();
+    if (!list.some((x) => x.id === req.params.id)) return res.status(404).json({ error: 'Incentive not found.' });
+    await saveIncentives(list.filter((x) => x.id !== req.params.id));
+    for (const { key } of await store.listSettings(`incentive_win:${req.params.id}:`)) await store.deleteSetting(key);
+    res.json({ ok: true });
+  });
+
+  // Award (or take back) an incentive by hand, e.g. the "you decide" kind.
+  app.post('/api/admin/incentives/:id/award', requireUser, requireAdmin, async (req, res) => {
+    const inc = (await loadIncentives()).find((x) => x.id === req.params.id);
+    if (!inc) return res.status(404).json({ error: 'Incentive not found.' });
+    const member = await store.getUser(String(req.body?.userId ?? ''));
+    if (!member || member.role === 'admin') return res.status(404).json({ error: 'Member not found.' });
+    const key = winKey(inc.id, member.id);
+    if (req.body?.won === false) {
+      await store.deleteSetting(key);
+    } else if (!(await store.getSetting(key))) {
+      await store.setSetting(key, JSON.stringify({ at: new Date().toISOString(), paid: false, manual: true }));
+      await pushTo([member.id], { title: `🏆 You unlocked: ${inc.title}`, body: `Reward: ${inc.reward}`, url: '/#/incentives', tag: `incentive-${inc.id}` });
+    }
+    res.json({ ok: true });
+  });
+
+  // Mark the reward as given (or not yet).
+  app.post('/api/admin/incentives/:id/paid', requireUser, requireAdmin, async (req, res) => {
+    const inc = (await loadIncentives()).find((x) => x.id === req.params.id);
+    if (!inc) return res.status(404).json({ error: 'Incentive not found.' });
+    const userId = String(req.body?.userId ?? '');
+    const key = winKey(inc.id, userId);
+    const raw = await store.getSetting(key);
+    if (!raw) return res.status(400).json({ error: 'They have not unlocked this incentive yet.' });
+    const win = { ...JSON.parse(raw), paid: req.body?.paid !== false };
+    await store.setSetting(key, JSON.stringify(win));
+    if (win.paid) await pushTo([userId], { title: `🎁 Reward on its way: ${inc.reward}`, body: `For unlocking ${inc.title}. Well done!`, url: '/#/incentives', tag: `incentive-${inc.id}` });
+    res.json({ ok: true });
+  });
+
   // --- admin: fund requests -------------------------------------------
 
   app.get('/api/admin/requests', requireUser, requireAdmin, async (req, res) => {
@@ -1287,6 +1453,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
   app.post('/api/admin/members/:id/transactions', requireUser, requireAdmin, loadMember, async (req, res) => {
     const tx = await recordTransaction(req.member, req.body, res);
     if (!tx?.id) return;
+    if (tx.type === 'income' && req.member.role !== 'admin') await checkIncentives(req.member.id);
     if (req.member.id !== req.user.id) {
       const amount = formatMoney(tx.amountCents, 'USD');
       await pushTo([req.member.id], {

@@ -320,6 +320,11 @@ class NotionStore {
     this.settingsCache = null;
   }
 
+  // All settings whose key starts with prefix, as [{ key, value }].
+  async listSettings(prefix) {
+    return [...(await this.settingsMap()).entries()].filter(([k]) => k.startsWith(prefix)).map(([key, v]) => ({ key, value: v.value }));
+  }
+
   async deleteSetting(key) {
     const existing = (await this.settingsMap()).get(key);
     if (existing) await this.notion.pages.update({ page_id: existing.pageId, in_trash: true });

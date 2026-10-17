@@ -87,6 +87,10 @@ class MemoryStore {
     this.settings.set(key, String(value));
   }
 
+  async listSettings(prefix) {
+    return [...this.settings.entries()].filter(([k]) => k.startsWith(prefix)).map(([key, value]) => ({ key, value }));
+  }
+
   async deleteSetting(key) {
     this.settings.delete(key);
   }

@@ -114,6 +114,7 @@ const ICONS = {
   bag: svg('<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>', 18),
   spark: svg('<path d="m12 3 1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/>', 18),
   heartSm: svg('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>', 18),
+  trophy: svg('<path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3"/><path d="M7 5H4v2a3 3 0 0 0 3 3"/>'),
   megaphone: svg('<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>'),
   inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>', 28),
   briefcase: svg('<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>', 18),
@@ -327,6 +328,7 @@ function renderShell() {
   links.push(['#/requests', 'Requests', ICONS.send, isAdmin ? pending : 0]);
   links.push(['#/scouting', 'Scouting', ICONS.scout]);
   links.push(['#/goals', 'Goals', ICONS.target]);
+  links.push(['#/incentives', 'Incentives', ICONS.trophy]);
   links.push(['#/account', 'Account', ICONS.user]);
   document.getElementById('nav').innerHTML = links
     .map(([href, text, icon, badge]) => {
@@ -459,6 +461,7 @@ function route() {
   if (scoutMember && user.role === 'admin') return renderMemberScouting(scoutMember[1]);
   if (hash === '#/scouting') return user.role === 'admin' ? renderScoutingBoard() : renderMyScouting();
   if (hash === '#/goals') return user.role === 'admin' ? renderGoalsBoard() : renderMyGoals();
+  if (hash === '#/incentives') return user.role === 'admin' ? renderIncentivesAdmin() : renderMyIncentives();
   if (hash === '#/account') return renderAccount();
   return renderDashboard();
 }
@@ -2218,6 +2221,181 @@ async function fillPushCard() {
     await pushApi.disable();
     toast('Notifications turned off on this device');
   });
+}
+
+// --- incentives -------------------------------------------------------------
+
+const INC_STATUS = {
+  won: ['active', '🏆 Unlocked'],
+  in_progress: ['pending', '🔥 On the way'],
+  available: ['info-pill', 'Up for grabs'],
+  upcoming: ['muted-pill', 'Coming soon'],
+  missed: ['declined', 'Ended'],
+};
+const incAmount = (inc, n) => (inc.money ? money(n) : `${Number(n).toLocaleString()}`);
+function incTarget(inc) {
+  if (inc.metric === 'manual') return 'Awarded by your team lead';
+  return `${inc.metricLabel}: <b>${inc.money ? money(inc.target) : `${inc.target.toLocaleString()} ${esc(inc.unit)}`}</b>`;
+}
+function incWhen(inc) {
+  const range = `${prettyDay(inc.start, { day: 'numeric', month: 'short' })} – ${prettyDay(inc.end, { day: 'numeric', month: 'short' })}`;
+  if (inc.daysLeft < 0) return `Ended · ${range}`;
+  if (inc.start > state.incToday) return `Starts ${prettyDay(inc.start, { day: 'numeric', month: 'short' })} · ${range}`;
+  if (inc.daysLeft === 0) return `Ends today · ${range}`;
+  return `${inc.daysLeft} day${inc.daysLeft === 1 ? '' : 's'} left · ${range}`;
+}
+function incBar(inc, progress, won) {
+  if (inc.metric === 'manual') return '';
+  const pct = Math.max(0, Math.min(100, inc.target ? (progress / inc.target) * 100 : 0));
+  return `<div class="inc-progress"><div class="inc-track"><span style="width:${won ? 100 : pct}%" class="${won ? 'won' : ''}"></span></div>
+    <div class="inc-nums"><b>${incAmount(inc, Math.min(progress, inc.target))}</b> / ${incAmount(inc, inc.target)}${won ? '' : ` · ${Math.round(pct)}%`}</div></div>`;
+}
+
+function incentiveCard(inc) {
+  const [cls, label] = INC_STATUS[inc.status] || INC_STATUS.available;
+  const won = inc.status === 'won';
+  const others = inc.winners.filter((w) => !(won && w.name === state.info.user.displayName));
+  return `
+    <section class="card inc-card ${won ? 'is-won' : ''} ${inc.status === 'missed' ? 'is-missed' : ''}">
+      <div class="inc-top"><span class="inc-ico">${won ? '🏆' : '🎁'}</span><span class="pill ${cls}">${label}</span></div>
+      <div class="inc-reward">${esc(inc.reward)}</div>
+      <h3>${esc(inc.title)}</h3>
+      ${inc.description ? `<p class="inc-desc">${esc(inc.description)}</p>` : ''}
+      <div class="inc-target">${incTarget(inc)}</div>
+      ${incBar(inc, inc.progress, won)}
+      ${won ? `<div class="inc-wonbox">Unlocked ${esc(formatDateTime(inc.wonAt))} · ${inc.paid ? '<b>Reward received ✓</b>' : 'Reward on its way'}</div>` : ''}
+      <div class="inc-foot"><span>${esc(incWhen(inc))}</span>
+        <span>${others.length ? `Unlocked by ${esc(others.slice(0, 3).map((w) => w.name.split(' ')[0]).join(', '))}${others.length > 3 ? ` +${others.length - 3}` : ''}` : won ? '' : 'Be the first to unlock it'}</span></div>
+    </section>`;
+}
+
+async function renderMyIncentives() {
+  setTitle('Incentives', 'Rewards you can unlock');
+  const { incentives, today } = await api('/api/incentives');
+  state.incToday = today;
+  const by = (st) => incentives.filter((i) => i.status === st);
+  const going = [...by('in_progress'), ...by('available')].sort((a, b) => (b.target ? b.progress / b.target : 0) - (a.target ? a.progress / a.target : 0));
+  const section = (title, list, empty) =>
+    list.length ? `<div class="s12"><h2 class="inc-h">${title}</h2><div class="inc-grid">${list.map(incentiveCard).join('')}</div></div>` : empty ? `<div class="s12"><h2 class="inc-h">${title}</h2><section class="card"><div class="empty">${empty}</div></section></div>` : '';
+  app.innerHTML = `
+    <div class="grid">
+      <div class="s12"><div class="inc-summary">
+        <div><span>🏆</span><b>${by('won').length}</b><small>Won</small></div>
+        <div><span>🔥</span><b>${by('in_progress').length}</b><small>On the way</small></div>
+        <div><span>🎁</span><b>${by('available').length}</b><small>Up for grabs</small></div>
+      </div></div>
+      ${section('Up for grabs', going, incentives.length ? 'Nothing open right now — check back soon.' : 'No incentives yet. Your team lead will add rewards here.')}
+      ${section('Coming soon', by('upcoming'))}
+      ${section('Won 🏆', by('won'))}
+      ${section('Ended', by('missed'))}
+    </div>`;
+}
+
+async function renderIncentivesAdmin() {
+  setTitle('Incentives', 'Rewards your team can unlock');
+  const { incentives, metrics, today } = await api('/api/incentives');
+  state.incToday = today;
+  const monthEnd = (() => {
+    const [y, m] = today.split('-').map(Number);
+    return `${today.slice(0, 7)}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+  })();
+  const order = (i) => (i.daysLeft < 0 ? 2 : i.start > today ? 1 : 0);
+  const sorted = [...incentives].sort((a, b) => order(a) - order(b) || a.end.localeCompare(b.end));
+  const memberRows = (inc) =>
+    inc.members.length
+      ? `<div class="inc-members">${inc.members
+          .map((m) => {
+            const [cls, label] = INC_STATUS[m.status] || INC_STATUS.available;
+            const won = m.status === 'won';
+            return `<div class="inc-mrow">
+              <span class="avatar sm blue">${esc(initials(m.name))}</span>
+              <div class="inc-mmain"><div class="inc-mname"><b>${esc(m.name)}</b><span class="pill ${cls}">${label}</span></div>${incBar(inc, m.progress, won)}</div>
+              <div class="inc-mact">${
+                won
+                  ? `<label class="paid-toggle"><input type="checkbox" data-paid="${esc(inc.id)}" data-user="${esc(m.id)}" ${m.paid ? 'checked' : ''}> Reward given</label>`
+                  : `<button type="button" class="btn soft small" data-award="${esc(inc.id)}" data-user="${esc(m.id)}">Award</button>`
+              }</div>
+            </div>`;
+          })
+          .join('')}</div>`
+      : '<p class="muted" style="margin:0">No active members yet.</p>';
+  app.innerHTML = `
+    <div class="grid">
+      <div class="s12"><section class="card">
+        <div class="card-head"><h2>New incentive</h2><span class="sub">Everyone gets a notification, and the app tracks progress for you</span></div>
+        <form id="inc-form">
+          <div class="row2">
+            <label>Name <input name="title" maxlength="80" required placeholder="e.g. Scouting machine"></label>
+            <label>Reward <input name="reward" maxlength="80" required placeholder="e.g. ₦20,000 bonus"></label>
+          </div>
+          <div class="row2">
+            <label>What has to be achieved <select name="metric">${Object.entries(metrics).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select></label>
+            <label class="inc-target-field"><span id="inc-target-label">Target</span> <input name="target" type="number" min="1" step="1" inputmode="decimal" placeholder="e.g. 20"></label>
+          </div>
+          <div class="row2">
+            <label>Starts <input name="start" type="date" value="${today.slice(0, 8)}01" required></label>
+            <label>Ends <input name="end" type="date" value="${monthEnd}" required></label>
+          </div>
+          <label>Description (optional) <input name="description" maxlength="300" placeholder="e.g. Hit the scouting minimum on 20 days this month"></label>
+          <div class="error"></div>
+          <button class="btn navy" type="submit">${ICONS.trophy} Create incentive</button>
+        </form>
+      </section></div>
+      ${
+        sorted.length
+          ? sorted
+              .map(
+                (inc) => `<div class="s12"><section class="card inc-admin ${inc.daysLeft < 0 ? 'is-missed' : ''}">
+          <div class="card-head"><div><div class="inc-reward" style="font-size:20px">${esc(inc.reward)}</div><h2 style="margin-top:2px">${esc(inc.title)}</h2></div>
+            <button type="button" class="btn soft small" data-del-inc="${esc(inc.id)}">${ICONS.trash} Remove</button></div>
+          <div class="inc-target" style="margin-top:-6px">${incTarget(inc)}</div>
+          <div class="inc-foot" style="margin:8px 0 14px"><span>${esc(incWhen(inc))}</span><span>${inc.winners.length} of ${inc.members.length} unlocked</span></div>
+          ${memberRows(inc)}
+        </section></div>`,
+              )
+              .join('')
+          : `<div class="s12"><section class="card"><div class="empty">${ICONS.trophy}No incentives yet. Create the first one above.</div></section></div>`
+      }
+    </div>`;
+  const form = app.querySelector('#inc-form');
+  const syncTarget = () => {
+    const metric = form.elements.metric.value;
+    form.querySelector('.inc-target-field').hidden = metric === 'manual';
+    form.elements.target.required = metric !== 'manual';
+    form.elements.target.step = metric === 'income' ? '0.01' : '1';
+    app.querySelector('#inc-target-label').textContent = metric === 'income' ? `Target (${displayCurrency() === 'NGN' ? '₦' : '$'})` : 'Target';
+  };
+  form.elements.metric.addEventListener('change', syncTarget);
+  syncTarget();
+  onSubmit(form, async (d) => {
+    let target = d.target;
+    // Money targets are entered in the currency on screen and stored in dollars.
+    if (d.metric === 'income' && displayCurrency() === 'NGN') target = Number(d.target) / (state.info.rates.NGN?.rate || 1);
+    await api('/api/admin/incentives', { method: 'POST', body: { ...d, target } });
+    toast('Incentive created — the team has been notified');
+    renderIncentivesAdmin();
+  });
+  app.querySelectorAll('[data-del-inc]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      if (!confirm('Remove this incentive? Its winners list goes too.')) return;
+      await api(`/api/admin/incentives/${b.dataset.delInc}`, { method: 'DELETE' });
+      toast('Incentive removed');
+      renderIncentivesAdmin();
+    }),
+  );
+  app.querySelectorAll('[data-award]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      await api(`/api/admin/incentives/${b.dataset.award}/award`, { method: 'POST', body: { userId: b.dataset.user } });
+      toast('Awarded — they have been notified');
+      renderIncentivesAdmin();
+    }),
+  );
+  app.querySelectorAll('[data-paid]').forEach((c) =>
+    c.addEventListener('change', async () => {
+      await api(`/api/admin/incentives/${c.dataset.paid}/paid`, { method: 'POST', body: { userId: c.dataset.user, paid: c.checked } });
+      toast(c.checked ? 'Marked as given — they have been notified' : 'Marked as not given yet');
+    }),
+  );
 }
 
 // Any 401 mid-session (expired cookie) sends the user back to sign in.
