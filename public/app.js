@@ -2234,8 +2234,9 @@ const INC_STATUS = {
 };
 const incAmount = (inc, n) => (inc.money ? money(n) : `${Number(n).toLocaleString()}`);
 function incTarget(inc) {
-  if (inc.metric === 'manual') return 'Awarded by your team lead';
-  return `${inc.metricLabel}: <b>${inc.money ? money(inc.target) : `${inc.target.toLocaleString()} ${esc(inc.unit)}`}</b>`;
+  const goal = inc.goal ? `<div class="inc-goal"><span>To unlock</span>${esc(inc.goal)}</div>` : '';
+  if (inc.metric === 'manual') return goal;
+  return `${goal}<div class="inc-tracked">Tracked by the app · ${esc(inc.metricLabel)}: <b>${inc.money ? money(inc.target) : `${inc.target.toLocaleString()} ${esc(inc.unit)}`}</b></div>`;
 }
 function incWhen(inc) {
   const range = `${prettyDay(inc.start, { day: 'numeric', month: 'short' })} – ${prettyDay(inc.end, { day: 'numeric', month: 'short' })}`;
@@ -2260,7 +2261,6 @@ function incentiveCard(inc) {
       <div class="inc-top"><span class="inc-ico">${won ? '🏆' : '🎁'}</span><span class="pill ${cls}">${label}</span></div>
       <div class="inc-reward">${esc(inc.reward)}</div>
       <h3>${esc(inc.title)}</h3>
-      ${inc.description ? `<p class="inc-desc">${esc(inc.description)}</p>` : ''}
       <div class="inc-target">${incTarget(inc)}</div>
       ${incBar(inc, inc.progress, won)}
       ${won ? `<div class="inc-wonbox">Unlocked ${esc(formatDateTime(inc.wonAt))} · ${inc.paid ? '<b>Reward received ✓</b>' : 'Reward on its way'}</div>` : ''}
@@ -2322,21 +2322,25 @@ async function renderIncentivesAdmin() {
   app.innerHTML = `
     <div class="grid">
       <div class="s12"><section class="card">
-        <div class="card-head"><h2>New incentive</h2><span class="sub">Everyone gets a notification, and the app tracks progress for you</span></div>
+        <div class="card-head"><h2>New incentive</h2><span class="sub">Everyone gets a notification · award it to whoever achieves it</span></div>
         <form id="inc-form">
           <div class="row2">
             <label>Name <input name="title" maxlength="80" required placeholder="e.g. Scouting machine"></label>
             <label>Reward <input name="reward" maxlength="80" required placeholder="e.g. ₦20,000 bonus"></label>
           </div>
-          <div class="row2">
-            <label>What has to be achieved <select name="metric">${Object.entries(metrics).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select></label>
-            <label class="inc-target-field"><span id="inc-target-label">Target</span> <input name="target" type="number" min="1" step="1" inputmode="decimal" placeholder="e.g. 20"></label>
-          </div>
+          <label>What has to be achieved <textarea name="goal" rows="2" maxlength="300" required placeholder="e.g. Close 3 new clients and post every day this month"></textarea></label>
+          <details class="inc-auto">
+            <summary>Let the app track it automatically (optional)</summary>
+            <p class="muted" style="font-size:13px;margin:8px 0 12px">Only for things the app already counts. Leave it on "No" and award it yourself with the Award button.</p>
+            <div class="row2">
+              <label>Track <select name="metric">${[['manual', metrics.manual], ...Object.entries(metrics).filter(([k]) => k !== 'manual')].map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select></label>
+              <label class="inc-target-field"><span id="inc-target-label">Target</span> <input name="target" type="number" min="1" step="1" inputmode="decimal" placeholder="e.g. 20"></label>
+            </div>
+          </details>
           <div class="row2">
             <label>Starts <input name="start" type="date" value="${today.slice(0, 8)}01" required></label>
             <label>Ends <input name="end" type="date" value="${monthEnd}" required></label>
           </div>
-          <label>Description (optional) <input name="description" maxlength="300" placeholder="e.g. Hit the scouting minimum on 20 days this month"></label>
           <div class="error"></div>
           <button class="btn navy" type="submit">${ICONS.trophy} Create incentive</button>
         </form>
@@ -2348,7 +2352,7 @@ async function renderIncentivesAdmin() {
                 (inc) => `<div class="s12"><section class="card inc-admin ${inc.daysLeft < 0 ? 'is-missed' : ''}">
           <div class="card-head"><div><div class="inc-reward" style="font-size:20px">${esc(inc.reward)}</div><h2 style="margin-top:2px">${esc(inc.title)}</h2></div>
             <button type="button" class="btn soft small" data-del-inc="${esc(inc.id)}">${ICONS.trash} Remove</button></div>
-          <div class="inc-target" style="margin-top:-6px">${incTarget(inc)}</div>
+          <div class="inc-target" style="margin-top:-2px">${incTarget(inc)}</div>
           <div class="inc-foot" style="margin:8px 0 14px"><span>${esc(incWhen(inc))}</span><span>${inc.winners.length} of ${inc.members.length} unlocked</span></div>
           ${memberRows(inc)}
         </section></div>`,

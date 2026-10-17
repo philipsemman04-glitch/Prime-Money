@@ -799,20 +799,22 @@ scenario('incentives: progress is tracked automatically, wins are recorded and a
 
   // Validation and permissions.
   assert.equal((await ada('/api/admin/incentives', { method: 'POST', body: {} })).status, 403);
-  assert.equal((await admin('/api/admin/incentives', { method: 'POST', body: { title: 'x', reward: 'y', metric: 'nope', target: 1, start, end } })).status, 400);
+  assert.equal((await admin('/api/admin/incentives', { method: 'POST', body: { title: 'x', reward: 'y', start, end } })).status, 400); // no goal written
+  assert.equal((await admin('/api/admin/incentives', { method: 'POST', body: { title: 'x', reward: 'y', goal: 'z', metric: 'nope', target: 1, start, end } })).status, 400);
   assert.equal((await admin('/api/admin/incentives', { method: 'POST', body: { title: 'x', reward: 'y', metric: 'messages', target: 0, start, end } })).status, 400);
   assert.equal((await admin('/api/admin/incentives', { method: 'POST', body: { title: 'x', reward: 'y', metric: 'messages', target: 5, start: end, end: start } })).status, 400);
 
   pushes.length = 0;
-  const { body: streak } = await admin('/api/admin/incentives', { method: 'POST', body: { title: '3-day streak', reward: '₦10,000', metric: 'scout_streak', target: 3, start, end } });
+  const { body: streak } = await admin('/api/admin/incentives', { method: 'POST', body: { title: '3-day streak', reward: '₦10,000', goal: 'Hit the minimum 3 days in a row', metric: 'scout_streak', target: 3, start, end } });
   assert.deepEqual(pushes.map((p) => [p.endpoint, p.title]), [['https://fcm.googleapis.com/fcm/send/ada', '🎁 New incentive: 3-day streak']]);
-  const { body: cash } = await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Big earner', reward: 'Dinner', metric: 'income', target: 500, start, end } });
-  const { body: spirit } = await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Team spirit', reward: 'Shout-out', metric: 'manual', start, end } });
-  await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Next month push', reward: 'Bonus', metric: 'messages', target: 100, start: teamDay(20), end: teamDay(40) } });
+  const { body: cash } = await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Big earner', reward: 'Dinner', goal: 'Bring in $500', metric: 'income', target: 500, start, end } });
+  const { body: spirit } = await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Team spirit', reward: 'Shout-out', goal: 'Help a teammate close a deal', start, end } });
+  await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Next month push', reward: 'Bonus', goal: 'Send 100 messages', metric: 'messages', target: 100, start: teamDay(20), end: teamDay(40) } });
 
   let mine = (await ada('/api/incentives')).body.incentives;
   assert.deepEqual(mine.map((i) => [i.title, i.status]), [['3-day streak', 'available'], ['Big earner', 'available'], ['Team spirit', 'available'], ['Next month push', 'upcoming']]);
   assert.equal(mine[1].target, 50000); // dollars are stored in cents
+  assert.deepEqual([mine[2].goal, mine[2].metric], ['Help a teammate close a deal', 'manual']); // typed goal, awarded by hand
 
   // Two days hitting the minimum: in progress.
   const full = { dms: 40, posts: 2, engagements: 40 };
@@ -854,7 +856,7 @@ scenario('incentives: progress is tracked automatically, wins are recorded and a
   assert.deepEqual(adminView.members.map((m) => [m.name, m.progress, m.status]), [['Ada Obi', 2, 'in_progress']]);
 
   // Edit and delete.
-  assert.equal((await admin(`/api/admin/incentives/${streak.id}`, { method: 'PUT', body: { title: '2-day streak', reward: '₦10,000', metric: 'scout_streak', target: 2, start, end } })).status, 200);
+  assert.equal((await admin(`/api/admin/incentives/${streak.id}`, { method: 'PUT', body: { title: '2-day streak', reward: '₦10,000', goal: 'Hit the minimum 2 days in a row', metric: 'scout_streak', target: 2, start, end } })).status, 200);
   assert.equal((await ada('/api/incentives')).body.incentives.find((i) => i.id === streak.id).status, 'won');
   assert.equal((await admin(`/api/admin/incentives/${cash.id}`, { method: 'DELETE' })).status, 200);
   mine = (await ada('/api/incentives')).body.incentives;

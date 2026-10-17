@@ -1151,7 +1151,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
         .filter(([k]) => k.startsWith(`${inc.id}:`))
         .map(([k, w]) => ({ id: k.slice(inc.id.length + 1), name: nameOf(k.slice(inc.id.length + 1)), at: w.at, paid: Boolean(w.paid) }))
         .sort((a, b) => String(a.at).localeCompare(String(b.at)));
-      const base = { ...inc, metricLabel: METRICS[inc.metric].label, unit: METRICS[inc.metric].unit, money: Boolean(METRICS[inc.metric].money), daysLeft: daysLeft(inc, today), winners: winners.map(({ name, at }) => ({ name, at })) };
+      const base = { ...inc, goal: inc.goal || inc.description || '', metricLabel: METRICS[inc.metric].label, unit: METRICS[inc.metric].unit, money: Boolean(METRICS[inc.metric].money), daysLeft: daysLeft(inc, today), winners: winners.map(({ name, at }) => ({ name, at })) };
       if (isAdmin) {
         return {
           ...base,

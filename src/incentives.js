@@ -13,7 +13,7 @@ const METRICS = {
   podcasts: { label: 'Podcasts watched', unit: 'podcasts' },
   goals_done: { label: 'Goals completed', unit: 'goals' },
   income: { label: 'Income made', unit: 'USD', money: true },
-  manual: { label: 'You decide (award it yourself)', unit: '' },
+  manual: { label: "No — I'll award it myself", unit: '' },
 };
 
 const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
@@ -88,12 +88,14 @@ function cleanIncentive(body, today) {
   const str = (v) => (typeof v === 'string' ? v.trim() : '');
   const title = str(body?.title);
   const reward = str(body?.reward);
-  const description = str(body?.description);
-  const metric = body?.metric;
+  // What has to be achieved, in the admin's own words.
+  const goal = str(body?.goal) || str(body?.description);
+  const metric = body?.metric || 'manual';
   if (!title || title.length > 80) return { error: 'Give the incentive a name (up to 80 characters).' };
   if (!reward || reward.length > 80) return { error: 'Say what the reward is (up to 80 characters).' };
-  if (description.length > 300) return { error: 'Keep the description under 300 characters.' };
-  if (!METRICS[metric]) return { error: 'Pick what has to be achieved.' };
+  if (!goal) return { error: 'Write what has to be achieved.' };
+  if (goal.length > 300) return { error: 'Keep "what has to be achieved" under 300 characters.' };
+  if (!METRICS[metric]) return { error: 'Pick how to track it, or leave it for you to award.' };
   let target = 0;
   if (metric !== 'manual') {
     const n = Number(body?.target);
@@ -107,7 +109,7 @@ function cleanIncentive(body, today) {
   if (!isDay(start) || !isDay(end)) return { error: 'Pick the start and end dates.' };
   if (end < start) return { error: 'The end date must be after the start date.' };
   if (Date.parse(end) - Date.parse(start) > 400 * 86400000) return { error: 'An incentive can run for up to about a year.' };
-  return { incentive: { title, reward, description, metric, target, start, end } };
+  return { incentive: { title, reward, goal, metric, target, start, end } };
 }
 
 module.exports = { METRICS, progressOf, statusOf, cleanIncentive, longestRun, monthsBetween };
