@@ -46,10 +46,11 @@
   </script>
   <!-- Signed-in app: sidebar + top bar + page -->
   <div class="shell" id="shell" hidden>
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <a class="brand" href="#/" aria-label="Home">
         <img class="brand-wordmark" src="/prime-wordmark.svg" alt="Prime" width="132" height="24">
       </a>
+      <button type="button" class="icon-btn flat drawer-only drawer-close" id="menu-close" aria-label="Close menu"></button>
       <div class="side-label">Menu</div>
       <nav class="nav" id="nav" aria-label="Main"></nav>
       <div class="side-label">Tools</div>
@@ -58,9 +59,12 @@
         <div class="seg" id="currency" role="group" aria-label="Display currency"></div>
       </div>
       <div class="side-widget" id="side-widget"></div>
+      <button type="button" class="drawer-only drawer-logout" id="drawer-logout"></button>
     </aside>
+    <div class="menu-backdrop" id="menu-backdrop"></div>
     <div class="main">
       <header class="topbar">
+        <button type="button" class="icon-btn menu-btn" id="menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar"></button>
         <a class="topbar-brand" href="#/"><img src="/logo-mark.png" alt="" width="30" height="30"></a>
         <div class="topbar-title" id="page-title"></div>
         <div class="topbar-right">

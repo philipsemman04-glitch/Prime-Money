@@ -115,6 +115,7 @@ const ICONS = {
   spark: svg('<path d="m12 3 1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/>', 18),
   heartSm: svg('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>', 18),
   trophy: svg('<path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3"/><path d="M7 5H4v2a3 3 0 0 0 3 3"/>'),
+  menu: svg('<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>'),
   megaphone: svg('<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>'),
   inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>', 28),
   briefcase: svg('<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>', 18),
@@ -354,6 +355,11 @@ function renderShell() {
   bell.innerHTML = `${ICONS.bell}${unread ? `<span class="badge">${unread}</span>` : ''}`;
   document.getElementById('avatar').innerHTML = `<span class="avatar">${esc(initials(user.displayName))}</span>`;
   document.getElementById('logout').innerHTML = ICONS.logout;
+  // A red dot on the menu button when something inside is waiting (e.g. fund requests).
+  const waiting = isAdmin ? pending : unseenAnnouncements().length + (unreadGoalComment() ? 1 : 0);
+  document.getElementById('menu-btn').innerHTML = `${ICONS.menu}${waiting ? '<span class="menu-dot"></span>' : ''}`;
+  document.getElementById('menu-close').innerHTML = ICONS.x;
+  document.getElementById('drawer-logout').innerHTML = `${ICONS.logout}<span>Log out</span>`;
   document.title = (isAdmin && pending ? `(${pending}) ` : '') + teamName;
   renderWidget();
 }
@@ -399,6 +405,33 @@ document.addEventListener('click', (e) => {
   }
 });
 document.getElementById('avatar').addEventListener('click', () => (location.hash = '#/account'));
+// Phone menu: the sidebar slides in from the left when the ☰ button is tapped.
+const shellEl = document.getElementById('shell');
+function setMenu(open) {
+  shellEl.classList.toggle('menu-open', open);
+  document.getElementById('menu-btn').setAttribute('aria-expanded', String(open));
+  document.body.classList.toggle('no-scroll', open);
+}
+document.getElementById('menu-btn').addEventListener('click', () => setMenu(true));
+document.getElementById('menu-close').addEventListener('click', () => setMenu(false));
+document.getElementById('menu-backdrop').addEventListener('click', () => setMenu(false));
+document.getElementById('sidebar').addEventListener('click', (e) => {
+  if (e.target.closest('a')) setMenu(false);
+});
+document.getElementById('drawer-logout').addEventListener('click', () => {
+  setMenu(false);
+  document.getElementById('logout').click();
+});
+document.addEventListener('keydown', (e) => e.key === 'Escape' && setMenu(false));
+window.addEventListener('hashchange', () => setMenu(false));
+// Swipe the menu to the left to close it.
+let swipeX = null;
+document.getElementById('sidebar').addEventListener('touchstart', (e) => (swipeX = e.touches[0].clientX), { passive: true });
+document.getElementById('sidebar').addEventListener('touchend', (e) => {
+  if (swipeX !== null && e.changedTouches[0].clientX - swipeX < -60) setMenu(false);
+  swipeX = null;
+});
+
 document.getElementById('logout').addEventListener('click', async () => {
   await api('/api/logout', { method: 'POST' }).catch(() => {});
   state.dash = null;

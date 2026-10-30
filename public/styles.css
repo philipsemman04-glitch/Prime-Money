@@ -52,6 +52,8 @@ h2 { font-size: 17px; font-weight: 700; }
 .num { font-variant-numeric: tabular-nums; }
 
 /* ---------- shell ---------- */
+/* Phone-only menu parts (shown in the phone section below). */
+.topbar .menu-btn, .shell .menu-backdrop, .sidebar .drawer-only { display: none; }
 .shell { display: grid; grid-template-columns: 250px 1fr; gap: 20px; padding: 20px; min-height: 100vh; }
 .sidebar {
   position: sticky; top: 20px; align-self: start;
@@ -519,20 +521,23 @@ textarea { resize: vertical; min-height: 80px; }
 
 /* ---------- phones ---------- */
 @media (max-width: 900px) {
-  .shell { display: block; padding: 14px 14px 100px; }
+  .shell { display: block; padding: 14px 14px 32px; }
+  /* The sidebar becomes a slide-in menu panel. */
   .sidebar {
-    position: fixed; inset: auto 0 0 0; top: auto; z-index: 40; height: auto; padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
-    border-radius: 20px 20px 0 0; box-shadow: 0 -6px 24px rgba(11, 22, 48, 0.08); flex-direction: row;
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 70; width: min(82vw, 300px); height: 100dvh;
+    padding: 24px 16px calc(16px + env(safe-area-inset-bottom)); border-radius: 0 24px 24px 0; overflow-y: auto;
+    transform: translateX(-105%); transition: transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1); box-shadow: 10px 0 40px rgba(11, 22, 48, 0.28);
   }
-  .sidebar .brand, .side-label, .side-tool, .side-widget { display: none; }
-  .nav { display: flex; width: 100%; justify-content: space-around; }
-  .nav a { flex-direction: column; gap: 3px; padding: 6px 4px; font-size: 10px; }
-  .nav a svg { width: 19px; height: 19px; }
-  .nav a[href="#/account"] { display: none; }
-  .nav a.active { background: transparent; }
-  .nav .badge { position: absolute; top: 0; right: 6px; margin: 0; }
-  .topbar-brand { display: block; }
-  .topbar-brand img { border-radius: 9px; }
+  .shell.menu-open .sidebar { transform: none; }
+  .shell .menu-backdrop { display: block; position: fixed; inset: 0; z-index: 65; background: rgba(11, 22, 48, 0.42); opacity: 0; pointer-events: none; transition: opacity 0.26s; }
+  .shell.menu-open .menu-backdrop { opacity: 1; pointer-events: auto; }
+  .sidebar .drawer-only { display: flex; }
+  .drawer-close { position: absolute; top: 16px; right: 12px; }
+  .drawer-logout { align-items: center; gap: 12px; margin-top: 10px; padding: 12px 14px; border: 0; border-radius: 14px; background: transparent; color: var(--expense); font: inherit; font-weight: 700; cursor: pointer; }
+  .drawer-logout:hover { background: var(--expense-soft); }
+  .side-widget { margin-top: 12px; }
+  .topbar .menu-btn { display: inline-grid; flex: none; }
+  body.no-scroll { overflow: hidden; }
   .topbar { gap: 10px; }
   .topbar-title { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .topbar-title small { display: none; }
@@ -546,7 +551,7 @@ textarea { resize: vertical; min-height: 80px; }
   .vcard .number { font-size: 15px; letter-spacing: 0.12em; margin: 26px 0 18px; }
   .vcard { padding: 18px; }
   .two-btns { grid-template-columns: 1fr; }
-  .toast { bottom: 96px; }
+  .toast { bottom: 28px; }
   .grid { gap: 14px; }
   .page { gap: 14px; }
 }
@@ -660,3 +665,5 @@ textarea { resize: vertical; min-height: 80px; }
 .inc-tracked { margin-top: 6px; font-size: 12px; color: var(--muted); }
 .inc-auto { margin: 4px 0 14px; padding: 10px 14px; border-radius: 14px; background: var(--surface-2); }
 .inc-auto summary { cursor: pointer; font-size: 14px; font-weight: 700; color: var(--navy); }
+.menu-btn { position: relative; }
+.menu-dot { position: absolute; top: 7px; right: 7px; width: 9px; height: 9px; border-radius: 50%; background: var(--expense); box-shadow: 0 0 0 2px var(--surface); }
