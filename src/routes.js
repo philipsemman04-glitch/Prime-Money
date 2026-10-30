@@ -15,6 +15,33 @@ const {
 const { createPusher } = require('./push');
 const { METRICS, progressOf, statusOf, cleanIncentive } = require('./incentives');
 
+// File storage for the library's PDFs (Vercel Blob). Uploads go from the
+// browser straight to storage, so big books aren't limited by Vercel's
+// request size; the server only hands out short-lived upload permission.
+function defaultBlob() {
+  const enabled = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+  return {
+    enabled,
+    handleUpload: (opts) => require('@vercel/blob/client').handleUpload(opts),
+    del: (url) => require('@vercel/blob').del(url),
+  };
+}
+const isBlobUrl = (u) => {
+  try {
+    const { protocol, hostname } = new URL(u);
+    return protocol === 'https:' && hostname.endsWith('.blob.vercel-storage.com');
+  } catch {
+    return false;
+  }
+};
+const isHttpsUrl = (u) => {
+  try {
+    return new URL(u).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 // Browsers' push services. Devices may only register endpoints on these hosts.
 const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'push.apple.com', 'notify.windows.com'];
 const isPushEndpoint = (value) => {
@@ -234,7 +261,7 @@ async function dashboardFor(store, userId, month) {
   };
 }
 
-function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate, notifier = createNotifier(), pusher = createPusher(), cronSecret } = {}) {
+function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate, notifier = createNotifier(), pusher = createPusher(), cronSecret, blob = defaultBlob() } = {}) {
   if (!sessionSecret) throw new Error('sessionSecret is required');
   const app = express();
 
@@ -1228,6 +1255,121 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     await store.setSetting(key, JSON.stringify(win));
     if (win.paid) await pushTo([userId], { title: `🎁 Reward on its way: ${inc.reward}`, body: `For unlocking ${inc.title}. Well done!`, url: '/#/incentives', tag: `incentive-${inc.id}` });
     res.json({ ok: true });
+  });
+
+  // --- library ------------------------------------------------------------
+  // Team library: PDFs everyone can download (the admin adds them).
+  // My library: each member's private list of books they've read.
+
+  const publicBook = (b) => ({ id: b.id, title: b.title, author: b.author, pages: b.pages, description: b.description, url: b.url, downloadUrl: b.downloadUrl || b.url, size: b.size, addedAt: b.addedAt, isFile: isBlobUrl(b.url) });
+
+  app.get('/api/library', requireUser, async (req, res) => {
+    const books = await store.listLibrary();
+    res.json({ books: books.sort((a, b) => String(b.addedAt).localeCompare(String(a.addedAt)) || a.title.localeCompare(b.title)).map(publicBook), uploads: blob.enabled && req.user.role === 'admin' });
+  });
+
+  // Gives the admin's browser permission to upload one PDF straight to storage.
+  app.post('/api/admin/library/upload', requireUser, requireAdmin, async (req, res) => {
+    if (!blob.enabled) return res.status(503).json({ error: 'File storage is not set up yet.' });
+    try {
+      const result = await blob.handleUpload({
+        body: req.body,
+        request: req,
+        onBeforeGenerateToken: async () => ({
+          allowedContentTypes: ['application/pdf'],
+          maximumSizeInBytes: 200 * 1024 * 1024,
+          addRandomSuffix: true,
+        }),
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message || 'Upload could not start.' });
+    }
+  });
+
+  app.post('/api/admin/library', requireUser, requireAdmin, async (req, res) => {
+    const str = (v) => (typeof v === 'string' ? v.trim() : '');
+    const title = str(req.body?.title);
+    const author = str(req.body?.author);
+    const description = str(req.body?.description);
+    const url = str(req.body?.url);
+    if (!title || title.length > 150) return res.status(400).json({ error: 'Give the book a title (up to 150 characters).' });
+    if (author.length > 100) return res.status(400).json({ error: 'Author name is too long.' });
+    if (description.length > 500) return res.status(400).json({ error: 'Keep the description under 500 characters.' });
+    if (!isHttpsUrl(url) || url.length > 1000) return res.status(400).json({ error: 'Upload the PDF or paste a link starting with https://' });
+    const pages = req.body?.pages === '' || req.body?.pages == null ? null : Number(req.body.pages);
+    if (pages !== null && (!Number.isInteger(pages) || pages <= 0 || pages > 20000)) return res.status(400).json({ error: 'Pages must be a whole number.' });
+    const downloadUrl = isBlobUrl(url) && isBlobUrl(req.body?.downloadUrl) ? req.body.downloadUrl : null;
+    const size = Number.isFinite(Number(req.body?.size)) && Number(req.body?.size) > 0 ? Math.round(Number(req.body.size)) : null;
+    const book = await store.createLibraryBook({ title, author, description, pages, url, downloadUrl, size });
+    const everyone = (await store.listUsers()).filter((u) => u.role !== 'admin' && u.status === 'active').map((u) => u.id);
+    await pushTo(everyone, { title: '📚 New book in the library', body: `${title}${author ? ` by ${author}` : ''}`, url: '/#/library', tag: `book-${book.id}` });
+    res.status(201).json(publicBook(book));
+  });
+
+  app.delete('/api/admin/library/:id', requireUser, requireAdmin, async (req, res) => {
+    const book = await store.getLibraryBook(req.params.id);
+    if (!book) return res.status(404).json({ error: 'Book not found.' });
+    if (isBlobUrl(book.url) && blob.enabled) await blob.del(book.url).catch((err) => console.error('Could not delete file:', err.message));
+    await store.deleteLibraryBook(book.id);
+    res.json({ ok: true });
+  });
+
+  // My library (private: only ever the signed-in member's own books).
+  function cleanReading(body) {
+    const str = (v) => (typeof v === 'string' ? v.trim() : '');
+    const title = str(body?.title);
+    const author = str(body?.author);
+    const pages = Number(body?.pages);
+    const finished = body?.finished || dayIn();
+    if (!title || title.length > 150) return { error: 'Write the name of the book.' };
+    if (author.length > 100) return { error: 'Author name is too long.' };
+    if (!Number.isInteger(pages) || pages <= 0 || pages > 20000) return { error: 'Enter the number of pages.' };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(finished) || Number.isNaN(Date.parse(finished))) return { error: 'Pick the date you finished it.' };
+    if (finished > dayIn()) return { error: "The finish date can't be in the future." };
+    return { book: { title, author, pages, finished } };
+  }
+  async function readingFor(userId) {
+    const books = (await store.listReading({ userId })).sort((a, b) => String(b.finished).localeCompare(String(a.finished)) || String(b.createdAt).localeCompare(String(a.createdAt)));
+    const year = dayIn().slice(0, 4);
+    const thisYear = books.filter((b) => String(b.finished).startsWith(year));
+    return {
+      books: books.map(({ id, title, author, pages, finished }) => ({ id, title, author, pages, finished })),
+      totals: {
+        books: books.length,
+        pages: books.reduce((s, b) => s + (b.pages || 0), 0),
+        thisYear: thisYear.length,
+        thisYearPages: thisYear.reduce((s, b) => s + (b.pages || 0), 0),
+        year,
+      },
+    };
+  }
+
+  app.get('/api/me/reading', requireUser, async (req, res) => {
+    res.json(await readingFor(req.user.id));
+  });
+
+  app.post('/api/me/reading', requireUser, async (req, res) => {
+    const { book, error } = cleanReading(req.body);
+    if (error) return res.status(400).json({ error });
+    await store.createReading({ ...book, userId: req.user.id });
+    res.status(201).json(await readingFor(req.user.id));
+  });
+
+  app.put('/api/me/reading/:id', requireUser, async (req, res) => {
+    const row = await store.getReading(req.params.id);
+    if (!row || row.userId !== req.user.id) return res.status(404).json({ error: 'Book not found.' });
+    const { book, error } = cleanReading(req.body);
+    if (error) return res.status(400).json({ error });
+    await store.updateReading(row.id, { ...book, userId: req.user.id });
+    res.json(await readingFor(req.user.id));
+  });
+
+  app.delete('/api/me/reading/:id', requireUser, async (req, res) => {
+    const row = await store.getReading(req.params.id);
+    if (!row || row.userId !== req.user.id) return res.status(404).json({ error: 'Book not found.' });
+    await store.deleteReading(row.id);
+    res.json(await readingFor(req.user.id));
   });
 
   // --- admin: fund requests -------------------------------------------

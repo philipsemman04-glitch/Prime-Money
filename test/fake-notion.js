@@ -24,6 +24,8 @@ const SCHEMAS = {
     Entry: 'title', Member: 'relation', Date: 'date', DMs: 'number', Posts: 'number', Engagements: 'number',
     Responses: 'number', Optimised: 'checkbox', Orders: 'rich_text', 'Podcast notes': 'rich_text', 'Podcasts data': 'rich_text',
   },
+  library: { Book: 'title', Author: 'rich_text', Pages: 'number', Description: 'rich_text', 'File URL': 'url', 'Download URL': 'url', Size: 'number', Added: 'date' },
+  reading: { Book: 'title', Member: 'relation', Author: 'rich_text', Pages: 'number', Finished: 'date' },
   devices: { Device: 'title', Member: 'relation', Endpoint: 'rich_text', Keys: 'rich_text', Added: 'date' },
   goals: { Goal: 'title', Member: 'relation', Month: 'rich_text', Done: 'checkbox', 'Done on': 'date' },
 };
@@ -34,7 +36,7 @@ function notFound() {
 
 class FakeNotion {
   constructor(ids, { pageSize = 2 } = {}) {
-    this.schemaFor = { [ids.membersId]: SCHEMAS.members, [ids.transactionsId]: SCHEMAS.transactions, [ids.settingsId]: SCHEMAS.settings, [ids.requestsId]: SCHEMAS.requests, [ids.scoutingId]: SCHEMAS.scouting, [ids.goalsId]: SCHEMAS.goals, [ids.devicesId]: SCHEMAS.devices };
+    this.schemaFor = { [ids.membersId]: SCHEMAS.members, [ids.transactionsId]: SCHEMAS.transactions, [ids.settingsId]: SCHEMAS.settings, [ids.requestsId]: SCHEMAS.requests, [ids.scoutingId]: SCHEMAS.scouting, [ids.goalsId]: SCHEMAS.goals, [ids.devicesId]: SCHEMAS.devices, [ids.libraryId]: SCHEMAS.library, [ids.readingId]: SCHEMAS.reading };
     this.pageSize = pageSize; // small, to exercise pagination
     this.pages = new Map();
     this.calls = 0;

@@ -15,6 +15,7 @@ A private money-management platform for a team.
 - **Phone notifications**: the site can be installed as an app (Chrome: **Install app** / **Add to Home screen**; iPhone: **Share → Add to Home Screen**). Each person turns notifications on from the dashboard prompt or the Account page. They then get a normal phone notification, which opens the right page when tapped, for: new fund requests, goals and scouting as soon as a member logs it, with their numbers (admin), request approved / paid / declined, goal comments, announcements, and the evening scouting reminder. iPhones only get notifications when the app is opened from the Home Screen (iOS 16.4 or newer).
 - **Incentives**: the admin creates rewards on the Incentives page: a name, the reward, what has to be achieved (typed in their own words) and the dates, then awards it to whoever achieves it. Optionally the app can track it automatically from scouting (days hitting the minimum, days in a row, messages, comments, posts, responses, podcasts), goals completed or income, and unlock it by itself. Members see what's up for grabs with a progress bar, what they've won, and who else unlocked each one. Everyone is notified about new incentives; the member and the admin are notified when one is unlocked, and the admin can tick "Reward given". Stored in the Settings table (`incentives` and `incentive_win:…` rows).
 - **Phone menu**: on phones, the ☰ button at the top opens a slide-in menu with every section, the currency switch, the Available box and Log out. A red dot on ☰ means something is waiting (e.g. fund requests). On computers the sidebar stays as it is.
+- **Library**: two tabs. *Team library*: the admin adds books (uploads a PDF, or adds a link) and everyone can download them; the team gets a notification for each new book. *My library*: each person's private list of books they've read (title, author, pages, date finished) with totals; nobody else can see it, not even the admin. "I read it" on a team book adds it to your list. PDFs are stored in Vercel Blob (the `BLOB_READ_WRITE_TOKEN` variable) and uploaded straight from the browser, so large files work.
 - **Opening animation**: when the app opens, the P rolls in, PRIME slides out of it, and the person is greeted ("Welcome back, Philips") before the dashboard appears. Tap to skip. People who turn off animations on their phone get a short fade instead.
 - **Dollars and naira**: all amounts are kept in US dollars. The **$ USD / ₦ NGN** switch shows everything in naira, and amounts can be entered in either currency. The rate is the live market rate, or a fixed rate the admin sets on the Team page.
 
@@ -30,6 +31,8 @@ All data is stored in Notion, under the private page **Prime Money — App Datab
 | **Fund Requests**| Each request: member, pot, items, total, bank details, status, note, receipt |
 | **Scouting Log** | One row per member per day: DMs, posts, engagements, responses, orders, optimisation, podcast notes |
 | **Goals**        | One row per goal: member, month, done                                        |
+| **Library**      | Books in the team library (title, author, pages, file link)                  |
+| **Reading Log**  | Each member's private reading list                                           |
 | **Devices**      | Phones/browsers that get notifications (used by the app, don't edit)         |
 
 Keep that page private. Don't edit the *Password hash*, *Invite token* or *Session version* columns by hand.
@@ -54,7 +57,7 @@ Email: with Gmail set, emails go to the admin and to members. With only Resend (
 
 The Notion integration must be connected to the **Prime Money — App Database** page (page menu **•••** → **Connections** → add "Prime Money").
 
-If the Notion tables are ever recreated, set `NOTION_MEMBERS_DS`, `NOTION_TRANSACTIONS_DS`, `NOTION_SETTINGS_DS`, `NOTION_REQUESTS_DS`, `NOTION_SCOUTING_DS`, `NOTION_GOALS_DS` and `NOTION_DEVICES_DS` to the new data source IDs.
+If the Notion tables are ever recreated, set `NOTION_MEMBERS_DS`, `NOTION_TRANSACTIONS_DS`, `NOTION_SETTINGS_DS`, `NOTION_REQUESTS_DS`, `NOTION_SCOUTING_DS`, `NOTION_GOALS_DS`, `NOTION_DEVICES_DS`, `NOTION_LIBRARY_DS` and `NOTION_READING_DS` to the new data source IDs.
 
 ## First use
 

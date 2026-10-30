@@ -5,7 +5,7 @@ const { MemoryStore } = require('../src/store/memory');
 const { NotionStore } = require('../src/store/notion');
 const { createFakeNotionClient } = require('./fake-notion');
 
-const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings', requestsId: 'ds-requests', scoutingId: 'ds-scouting', goalsId: 'ds-goals', devicesId: 'ds-devices' };
+const IDS = { membersId: 'ds-members', transactionsId: 'ds-transactions', settingsId: 'ds-settings', requestsId: 'ds-requests', scoutingId: 'ds-scouting', goalsId: 'ds-goals', devicesId: 'ds-devices', libraryId: 'ds-library', readingId: 'ds-reading' };
 const STORES = {
   memory: () => new MemoryStore(),
   notion: () => new NotionStore({ ...IDS, client: createFakeNotionClient(IDS) }),
@@ -18,8 +18,8 @@ function scenario(name, fn) {
   }
 }
 
-async function startServer(makeStore, { fetchLiveRate = async () => 1500, notifier, pusher, cronSecret } = {}) {
-  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate, cronSecret, ...(notifier ? { notifier } : {}), ...(pusher ? { pusher } : {}) });
+async function startServer(makeStore, { fetchLiveRate = async () => 1500, notifier, pusher, cronSecret, blob } = {}) {
+  const app = createApp(makeStore(), { sessionSecret: 'test-secret', fetchLiveRate, cronSecret, ...(notifier ? { notifier } : {}), ...(pusher ? { pusher } : {}), blob: blob || { enabled: false } });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -861,4 +861,66 @@ scenario('incentives: progress is tracked automatically, wins are recorded and a
   assert.equal((await admin(`/api/admin/incentives/${cash.id}`, { method: 'DELETE' })).status, 200);
   mine = (await ada('/api/incentives')).body.incentives;
   assert.equal(mine.some((i) => i.id === cash.id), false);
+});
+
+scenario('library: the admin shares PDFs everyone can download; each member keeps a private reading list', async (t, makeStore) => {
+  const deleted = [];
+  const blob = {
+    enabled: true,
+    async handleUpload({ body, onBeforeGenerateToken }) {
+      const opts = await onBeforeGenerateToken(body.payload.pathname, null, true);
+      assert.deepEqual(opts.allowedContentTypes, ['application/pdf']);
+      return { type: 'blob.generate-client-token', clientToken: 'client-token' };
+    },
+    async del(url) { deleted.push(url); },
+  };
+  const { base, close } = await startServer(makeStore, { blob });
+  t.after(close);
+  const { admin, ada } = await teamWithMember(base);
+  const { body: inv } = await admin('/api/admin/members', { method: 'POST', body: { displayName: 'Ben' } });
+  const ben = client(base);
+  await ben(`/api/invite/${inv.inviteToken}`, { method: 'POST', body: { username: 'ben', password: 'password123' } });
+
+  // Only the admin can upload or add books.
+  const tokenReq = { type: 'blob.generate-client-token', payload: { pathname: 'rich-dad.pdf', clientPayload: null, multipart: true } };
+  assert.equal((await ada('/api/admin/library/upload', { method: 'POST', body: tokenReq })).status, 403);
+  assert.equal((await admin('/api/admin/library/upload', { method: 'POST', body: tokenReq })).body.clientToken, 'client-token');
+  assert.equal((await ada('/api/admin/library', { method: 'POST', body: { title: 'x', url: 'https://a.b/c.pdf' } })).status, 403);
+  assert.equal((await admin('/api/admin/library', { method: 'POST', body: { title: '', url: 'https://a.b/c.pdf' } })).status, 400);
+  assert.equal((await admin('/api/admin/library', { method: 'POST', body: { title: 'x', url: 'http://insecure.example/c.pdf' } })).status, 400);
+
+  const fileUrl = 'https://abc123.public.blob.vercel-storage.com/rich-dad-Xy12.pdf';
+  const { body: book } = await admin('/api/admin/library', { method: 'POST', body: { title: 'Rich Dad Poor Dad', author: 'Robert Kiyosaki', pages: '336', url: fileUrl, downloadUrl: `${fileUrl}?download=1`, size: 2400000 } });
+  assert.deepEqual([book.title, book.author, book.pages, book.isFile, book.downloadUrl], ['Rich Dad Poor Dad', 'Robert Kiyosaki', 336, true, `${fileUrl}?download=1`]);
+  await admin('/api/admin/library', { method: 'POST', body: { title: 'The Psychology of Money', author: 'Morgan Housel', url: 'https://drive.google.com/file/d/abc/view' } });
+
+  // Everyone signed in sees the team library.
+  const lib = (await ada('/api/library')).body;
+  assert.equal(lib.books.length, 2);
+  assert.equal(lib.uploads, false); // only the admin uploads
+  assert.equal((await admin('/api/library')).body.uploads, true);
+  assert.equal((await client(base)('/api/library')).status, 401);
+
+  // My library is private.
+  assert.equal((await ada('/api/me/reading', { method: 'POST', body: { title: 'Atomic Habits', author: 'James Clear' } })).status, 400); // pages needed
+  assert.equal((await ada('/api/me/reading', { method: 'POST', body: { title: 'Atomic Habits', pages: 320, finished: '2999-01-01' } })).status, 400);
+  await ada('/api/me/reading', { method: 'POST', body: { title: 'Atomic Habits', author: 'James Clear', pages: 320, finished: teamDay(-10) } });
+  let mine = (await ada('/api/me/reading', { method: 'POST', body: { title: 'Rich Dad Poor Dad', author: 'Robert Kiyosaki', pages: 336 } })).body;
+  assert.deepEqual([mine.totals.books, mine.totals.pages], [2, 656]);
+  assert.equal(mine.books[0].title, 'Rich Dad Poor Dad'); // newest first
+  assert.equal(mine.books[0].finished, teamDay());
+  assert.equal((await ben('/api/me/reading')).body.books.length, 0); // Ben can't see Ada's
+  const atomic = mine.books.find((b) => b.title === 'Atomic Habits');
+  assert.equal((await ben(`/api/me/reading/${atomic.id}`, { method: 'DELETE' })).status, 404);
+  assert.equal((await admin(`/api/me/reading/${atomic.id}`, { method: 'PUT', body: { title: 'x', pages: 1 } })).status, 404); // not even the admin
+  mine = (await ada(`/api/me/reading/${atomic.id}`, { method: 'PUT', body: { title: 'Atomic Habits', author: 'James Clear', pages: 306, finished: teamDay(-10) } })).body;
+  assert.equal(mine.totals.pages, 642);
+  mine = (await ada(`/api/me/reading/${atomic.id}`, { method: 'DELETE' })).body;
+  assert.equal(mine.totals.books, 1);
+
+  // Removing a book also removes its file.
+  assert.equal((await admin(`/api/admin/library/${book.id}`, { method: 'DELETE' })).status, 200);
+  assert.deepEqual(deleted, [fileUrl]);
+  assert.equal((await ada('/api/library')).body.books.length, 1);
+  assert.equal((await admin('/api/admin/library/nope', { method: 'DELETE' })).status, 404);
 });

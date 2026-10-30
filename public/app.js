@@ -114,6 +114,10 @@ const ICONS = {
   bag: svg('<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>', 18),
   spark: svg('<path d="m12 3 1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/>', 18),
   heartSm: svg('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>', 18),
+  edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>', 16),
+  book: svg('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'),
+  download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>'),
+  lock: svg('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>', 14),
   trophy: svg('<path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3"/><path d="M7 5H4v2a3 3 0 0 0 3 3"/>'),
   menu: svg('<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>'),
   megaphone: svg('<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>'),
@@ -330,6 +334,7 @@ function renderShell() {
   links.push(['#/scouting', 'Scouting', ICONS.scout]);
   links.push(['#/goals', 'Goals', ICONS.target]);
   links.push(['#/incentives', 'Incentives', ICONS.trophy]);
+  links.push(['#/library', 'Library', ICONS.book]);
   links.push(['#/account', 'Account', ICONS.user]);
   document.getElementById('nav').innerHTML = links
     .map(([href, text, icon, badge]) => {
@@ -494,6 +499,7 @@ function route() {
   if (scoutMember && user.role === 'admin') return renderMemberScouting(scoutMember[1]);
   if (hash === '#/scouting') return user.role === 'admin' ? renderScoutingBoard() : renderMyScouting();
   if (hash === '#/goals') return user.role === 'admin' ? renderGoalsBoard() : renderMyGoals();
+  if (hash === '#/library' || hash === '#/library/mine') return renderLibrary(hash === '#/library/mine' ? 'mine' : 'team');
   if (hash === '#/incentives') return user.role === 'admin' ? renderIncentivesAdmin() : renderMyIncentives();
   if (hash === '#/account') return renderAccount();
   return renderDashboard();
@@ -2433,6 +2439,240 @@ async function renderIncentivesAdmin() {
       toast(c.checked ? 'Marked as given — they have been notified' : 'Marked as not given yet');
     }),
   );
+}
+
+// --- library ----------------------------------------------------------------
+
+const fileSize = (bytes) => (!bytes ? '' : bytes > 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`);
+// A simple "cover" for a book: its initials on a colour picked from the title.
+function bookCover(title) {
+  const colours = [['#1d3f9e', '#4f7cff'], ['#0b1f4d', '#2563eb'], ['#7a4b0c', '#f0a92a'], ['#0e5c49', '#22b07d'], ['#5b2a86', '#9d6bff'], ['#8a1f3d', '#e5487a']];
+  const [a, b] = colours[hash(title) % colours.length];
+  const initials = title.split(/\s+/).map((w) => (w.match(/[A-Za-z]/) || [''])[0].toUpperCase()).filter(Boolean).slice(0, 2).join('') || 'B';
+  return `<div class="book-cover" style="background:linear-gradient(150deg,${a},${b})"><span>${esc(initials)}</span>${ICONS.book}</div>`;
+}
+
+// The upload helper is only needed by the admin, so it loads on demand.
+function loadBlobUpload() {
+  if (window.PrimeBlob) return Promise.resolve(window.PrimeBlob);
+  return (loadBlobUpload.p ??= new Promise((resolve, reject) => {
+    const tag = document.createElement('script');
+    tag.src = '/vendor/blob-upload.js';
+    tag.onload = () => resolve(window.PrimeBlob);
+    tag.onerror = () => reject(new Error('Could not load the uploader. Check your connection and try again.'));
+    document.head.appendChild(tag);
+  }));
+}
+
+function openReadingForm(book, onSaved) {
+  const editing = Boolean(book?.id);
+  const today = new Date().toISOString().slice(0, 10);
+  const { el, close } = openModal(
+    editing ? 'Edit book' : 'Add a book you read',
+    `<form id="read-form">
+      <label>Book title <input name="title" maxlength="150" required value="${esc(book?.title || '')}" placeholder="e.g. Atomic Habits"></label>
+      <label>Author <input name="author" maxlength="100" value="${esc(book?.author || '')}" placeholder="e.g. James Clear"></label>
+      <div class="row2">
+        <label>Number of pages <input name="pages" type="number" min="1" step="1" inputmode="numeric" required value="${esc(book?.pages || '')}" placeholder="e.g. 320"></label>
+        <label>Finished on <input name="finished" type="date" max="${today}" value="${esc(book?.finished || today)}" required></label>
+      </div>
+      <p class="muted lock-note">${ICONS.lock} Only you can see your library.</p>
+      <div class="error"></div>
+      <button class="btn block" type="submit">${editing ? 'Save changes' : 'Add to my library'}</button>
+    </form>`,
+  );
+  onSubmit(el.querySelector('#read-form'), async (d) => {
+    await api(editing ? `/api/me/reading/${book.id}` : '/api/me/reading', { method: editing ? 'PUT' : 'POST', body: d });
+    close();
+    toast(editing ? 'Book updated' : 'Added to your library 📚');
+    onSaved();
+  });
+}
+
+async function renderLibrary(tab = 'team') {
+  setTitle('Library', tab === 'mine' ? 'Your private reading list' : 'Books for the team');
+  const isAdmin = state.info.user.role === 'admin';
+  const tabs = `<div class="lib-tabs seg"><a href="#/library" class="${tab === 'team' ? 'on' : ''}">${ICONS.book} Team library</a><a href="#/library/mine" class="${tab === 'mine' ? 'on' : ''}">${ICONS.lock} My library</a></div>`;
+
+  if (tab === 'mine') {
+    const data = await api('/api/me/reading');
+    const t = data.totals;
+    app.innerHTML = `
+      ${tabs}
+      <div class="lib-stats">
+        <div><b>${t.books}</b><small>Books read</small></div>
+        <div><b>${t.pages.toLocaleString()}</b><small>Pages read</small></div>
+        <div><b>${t.thisYear}</b><small>Books in ${esc(t.year)}</small></div>
+      </div>
+      <section class="card">
+        <div class="card-head"><h2>My books</h2><button type="button" class="btn small" id="add-read">${ICONS.plus} Add a book</button></div>
+        <p class="muted lock-note" style="margin-top:-6px">${ICONS.lock} Private — only you can see this list.</p>
+        ${
+          data.books.length
+            ? `<ul class="read-list">${data.books
+                .map(
+                  (b) => `<li>${bookCover(b.title)}
+                  <div class="read-main"><b>${esc(b.title)}</b><span>${b.author ? esc(b.author) + ' · ' : ''}${b.pages.toLocaleString()} pages</span><small>Finished ${esc(prettyDay(b.finished, { day: 'numeric', month: 'short', year: 'numeric' }))}</small></div>
+                  <div class="read-act"><button type="button" class="icon-btn flat" data-edit-read="${esc(b.id)}" aria-label="Edit">${ICONS.edit}</button><button type="button" class="icon-btn flat del" data-del-read="${esc(b.id)}" aria-label="Delete">${ICONS.trash}</button></div></li>`,
+                )
+                .join('')}</ul>`
+            : `<div class="empty">${ICONS.book}No books yet. Add the first book you've read.</div>`
+        }
+      </section>`;
+    const rerender = () => renderLibrary('mine');
+    app.querySelector('#add-read').addEventListener('click', () => openReadingForm(null, rerender));
+    app.querySelectorAll('[data-edit-read]').forEach((b) => b.addEventListener('click', () => openReadingForm(data.books.find((x) => x.id === b.dataset.editRead), rerender)));
+    app.querySelectorAll('[data-del-read]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        if (!confirm('Remove this book from your library?')) return;
+        await api(`/api/me/reading/${b.dataset.delRead}`, { method: 'DELETE' });
+        toast('Book removed');
+        rerender();
+      }),
+    );
+    return;
+  }
+
+  const { books, uploads } = await api('/api/library');
+  const addForm = isAdmin
+    ? `<section class="card">
+        <div class="card-head"><h2>Add a book</h2><span class="sub">The team gets a notification</span></div>
+        <form id="book-form">
+          <div class="row2">
+            <label>Title <input name="title" maxlength="150" required placeholder="e.g. Rich Dad Poor Dad"></label>
+            <label>Author <input name="author" maxlength="100" placeholder="e.g. Robert Kiyosaki"></label>
+          </div>
+          <div class="row2">
+            <label>Pages (optional) <input name="pages" type="number" min="1" step="1" inputmode="numeric"></label>
+            <label>Short description (optional) <input name="description" maxlength="500" placeholder="Why the team should read it"></label>
+          </div>
+          ${
+            uploads
+              ? `<label class="file-drop">${ICONS.download}<span id="file-label"><b>Choose the PDF</b> or drop it here</span><input name="file" type="file" accept="application/pdf,.pdf"></label>
+                 <details class="lib-link"><summary>Or add a link instead (e.g. Google Drive)</summary><input name="link" type="url" placeholder="https://..." style="margin-top:8px"></details>`
+              : `<label>Link to the PDF <input name="link" type="url" placeholder="https://..." required></label>`
+          }
+          <div class="upload-progress" hidden><div class="inc-track"><span></span></div><small></small></div>
+          <div class="error"></div>
+          <button class="btn navy" type="submit" id="book-submit">${ICONS.book} Add to the library</button>
+        </form>
+      </section>`
+    : '';
+  app.innerHTML = `
+    ${tabs}
+    ${addForm}
+    <section class="card">
+      <div class="card-head"><h2>Team library <span class="count-pill">${books.length}</span></h2>
+        ${books.length > 4 ? '<input type="search" id="book-search" class="lib-search" placeholder="Search title or author">' : ''}</div>
+      ${
+        books.length
+          ? `<div class="book-grid">${books
+              .map(
+                (b) => `<div class="book" data-search="${esc(`${b.title} ${b.author}`.toLowerCase())}">
+                ${bookCover(b.title)}
+                <div class="book-info"><b>${esc(b.title)}</b>${b.author ? `<span>${esc(b.author)}</span>` : ''}
+                  <small>${[b.pages ? `${b.pages} pages` : '', b.isFile ? `PDF${b.size ? ' · ' + fileSize(b.size) : ''}` : 'Link'].filter(Boolean).join(' · ')}</small>
+                  ${b.description ? `<p>${esc(b.description)}</p>` : ''}</div>
+                <div class="book-actions">
+                  <a class="btn small" href="${esc(b.downloadUrl)}" target="_blank" rel="noopener" ${b.isFile ? 'download' : ''}>${ICONS.download} ${b.isFile ? 'Download' : 'Open'}</a>
+                  <button type="button" class="btn soft small" data-read-it="${esc(b.id)}">I read it</button>
+                  ${isAdmin ? `<button type="button" class="icon-btn flat del" data-del-book="${esc(b.id)}" aria-label="Remove">${ICONS.trash}</button>` : ''}
+                </div>
+              </div>`,
+              )
+              .join('')}</div>`
+          : `<div class="empty">${ICONS.book}No books yet.${isAdmin ? ' Add the first one above.' : ' Your team lead will add books here.'}</div>`
+      }
+    </section>`;
+
+  app.querySelector('#book-search')?.addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    app.querySelectorAll('.book').forEach((el) => (el.hidden = q && !el.dataset.search.includes(q)));
+  });
+  app.querySelectorAll('[data-read-it]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const b = books.find((x) => x.id === btn.dataset.readIt);
+      openReadingForm({ title: b.title, author: b.author, pages: b.pages || '' }, () => (location.hash = '#/library/mine'));
+    }),
+  );
+  app.querySelectorAll('[data-del-book]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      if (!confirm('Remove this book from the team library? The PDF is deleted too.')) return;
+      await api(`/api/admin/library/${btn.dataset.delBook}`, { method: 'DELETE' });
+      toast('Book removed');
+      renderLibrary('team');
+    }),
+  );
+
+  const form = app.querySelector('#book-form');
+  if (!form) return;
+  const fileInput = form.elements.file;
+  fileInput?.addEventListener('change', () => {
+    const f = fileInput.files[0];
+    app.querySelector('#file-label').innerHTML = f ? `<b>${esc(f.name)}</b> · ${fileSize(f.size)}` : '<b>Choose the PDF</b> or drop it here';
+    if (f && !form.elements.title.value) form.elements.title.value = f.name.replace(/\.pdf$/i, '').replace(/[-_]+/g, ' ');
+  });
+  onSubmit(form, async (d) => {
+    const file = fileInput?.files[0];
+    let fileInfo = { url: (d.link || '').trim() };
+    if (file) {
+      if (file.type && file.type !== 'application/pdf') throw new Error('Please choose a PDF file.');
+      const { upload } = await loadBlobUpload();
+      const bar = form.querySelector('.upload-progress');
+      bar.hidden = false;
+      const show = (pct) => {
+        bar.querySelector('span').style.width = `${pct}%`;
+        bar.querySelector('small').textContent = pct < 100 ? `Uploading… ${Math.round(pct)}%` : 'Saving…';
+      };
+      show(0);
+      const safe = file.name.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '') || 'book.pdf';
+      // Give up (with a clear message) if the upload makes no progress for 45 seconds.
+      const stop = new AbortController();
+      let lastProgress = Date.now();
+      let lastPct = -1;
+      let watchdog;
+      const stalled = new Promise((_, reject) => {
+        watchdog = setInterval(() => {
+          if (Date.now() - lastProgress > 45000) {
+            stop.abort();
+            reject(new Error('stalled'));
+          }
+        }, 3000);
+      });
+      let result;
+      try {
+        result = await Promise.race([
+          upload(`library/${safe.endsWith('.pdf') ? safe : safe + '.pdf'}`, file, {
+            access: 'public',
+            handleUploadUrl: '/api/admin/library/upload',
+            headers: { 'X-Requested-With': 'prime-money' },
+            contentType: 'application/pdf',
+            multipart: file.size > 8 * 1024 * 1024,
+            abortSignal: stop.signal,
+            onUploadProgress: ({ percentage }) => {
+              if (percentage > lastPct) {
+                lastPct = percentage;
+                lastProgress = Date.now();
+              }
+              show(percentage);
+            },
+          }),
+          stalled,
+        ]);
+      } catch (err) {
+        bar.hidden = true;
+        throw new Error(stop.signal.aborted ? 'The upload stopped making progress. Check your connection and try again.' : `Upload failed: ${err.message}`);
+      } finally {
+        clearInterval(watchdog);
+      }
+      fileInfo = { url: result.url, downloadUrl: result.downloadUrl, size: file.size };
+    } else if (!fileInfo.url) {
+      throw new Error(uploads ? 'Choose the PDF, or add a link.' : 'Add the link to the PDF.');
+    }
+    await api('/api/admin/library', { method: 'POST', body: { title: d.title, author: d.author, pages: d.pages, description: d.description, ...fileInfo } });
+    toast('Book added — the team has been notified 📚');
+    renderLibrary('team');
+  });
 }
 
 // Any 401 mid-session (expired cookie) sends the user back to sign in.

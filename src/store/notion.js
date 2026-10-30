@@ -155,6 +155,41 @@ function toDevice(page) {
   };
 }
 
+function toBook(page) {
+  const p = page.properties;
+  return {
+    id: page.id,
+    title: readText(p['Book']) ?? '',
+    author: readText(p['Author']) ?? '',
+    pages: readNumber(p['Pages']),
+    description: readText(p['Description']) ?? '',
+    url: p['File URL']?.url ?? null,
+    downloadUrl: p['Download URL']?.url ?? null,
+    size: readNumber(p['Size']),
+    addedAt: readDate(p['Added']) ?? page.created_time,
+  };
+}
+
+function toReading(page) {
+  const p = page.properties;
+  return {
+    id: page.id,
+    userId: p['Member']?.relation?.[0]?.id ?? null,
+    title: readText(p['Book']) ?? '',
+    author: readText(p['Author']) ?? '',
+    pages: readNumber(p['Pages']) ?? 0,
+    finished: readDate(p['Finished']),
+    createdAt: page.created_time,
+  };
+}
+const readingProperties = (r) => ({
+  Book: { title: text(r.title) },
+  Member: { relation: [{ id: r.userId }] },
+  Author: { rich_text: text(r.author) },
+  Pages: { number: r.pages },
+  Finished: date(r.finished),
+});
+
 function toGoal(page) {
   const p = page.properties;
   return {
@@ -203,7 +238,7 @@ function nextMonthStart(month) {
 }
 
 class NotionStore {
-  constructor({ token, membersId, transactionsId, settingsId, requestsId, scoutingId, goalsId, devicesId, client }) {
+  constructor({ token, membersId, transactionsId, settingsId, requestsId, scoutingId, goalsId, devicesId, libraryId, readingId, client }) {
     this.notion = client ?? new Client({ auth: token });
     this.ids = {
       members: membersId,
@@ -213,6 +248,8 @@ class NotionStore {
       scouting: scoutingId,
       goals: goalsId,
       devices: devicesId,
+      library: libraryId,
+      reading: readingId,
     };
     this.settingsCache = null;
   }
@@ -292,6 +329,77 @@ class NotionStore {
   }
 
   async deleteDevice(id) {
+    await this.notion.pages.update({ page_id: id, in_trash: true });
+  }
+
+  // --- library: books the team can download ---
+
+  async listLibrary() {
+    if (!this.ids.library) return [];
+    return (await this.queryAll(this.ids.library)).map(toBook);
+  }
+
+  async getLibraryBook(id) {
+    try {
+      const page = await this.notion.pages.retrieve({ page_id: id });
+      return page.in_trash || page.parent?.data_source_id !== this.ids.library ? null : toBook(page);
+    } catch (err) {
+      if (err.code === 'object_not_found' || err.code === 'validation_error') return null;
+      throw err;
+    }
+  }
+
+  async createLibraryBook(b) {
+    if (!this.ids.library) throw new Error('The Library table is not set up.');
+    const page = await this.notion.pages.create({
+      parent: { type: 'data_source_id', data_source_id: this.ids.library },
+      properties: {
+        Book: { title: text(b.title) },
+        Author: { rich_text: text(b.author) },
+        Pages: { number: b.pages ?? null },
+        Description: { rich_text: text(b.description) },
+        'File URL': { url: b.url },
+        'Download URL': { url: b.downloadUrl ?? null },
+        Size: { number: b.size ?? null },
+        Added: date(new Date().toISOString().slice(0, 10)),
+      },
+    });
+    return toBook(page);
+  }
+
+  async deleteLibraryBook(id) {
+    await this.notion.pages.update({ page_id: id, in_trash: true });
+  }
+
+  // --- reading log: each member's own books (private) ---
+
+  async listReading({ userId }) {
+    if (!this.ids.reading) return [];
+    const pages = await this.queryAll(this.ids.reading, { filter: { property: 'Member', relation: { contains: userId } } });
+    return pages.map(toReading);
+  }
+
+  async getReading(id) {
+    try {
+      const page = await this.notion.pages.retrieve({ page_id: id });
+      return page.in_trash || page.parent?.data_source_id !== this.ids.reading ? null : toReading(page);
+    } catch (err) {
+      if (err.code === 'object_not_found' || err.code === 'validation_error') return null;
+      throw err;
+    }
+  }
+
+  async createReading(r) {
+    if (!this.ids.reading) throw new Error('The Reading Log table is not set up.');
+    const page = await this.notion.pages.create({ parent: { type: 'data_source_id', data_source_id: this.ids.reading }, properties: readingProperties(r) });
+    return toReading(page);
+  }
+
+  async updateReading(id, r) {
+    await this.notion.pages.update({ page_id: id, properties: readingProperties(r) });
+  }
+
+  async deleteReading(id) {
     await this.notion.pages.update({ page_id: id, in_trash: true });
   }
 

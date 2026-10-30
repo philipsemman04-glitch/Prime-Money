@@ -22,6 +22,8 @@ const NOTION_IDS = {
   scoutingId: env.NOTION_SCOUTING_DS || 'e7f2cd13-28c5-48bf-83d8-6b9f4ab82500',
   goalsId: env.NOTION_GOALS_DS || 'fc460b92-796a-4c35-9517-c0c9f8223853',
   devicesId: env.NOTION_DEVICES_DS || '745815cb-51b1-491f-90f7-433ddd3fcaaa',
+  libraryId: env.NOTION_LIBRARY_DS || 'fe30f3da-392e-4d3f-ba87-fab87e936e08',
+  readingId: env.NOTION_READING_DS || 'f175a7bc-2918-46f4-a875-75abf2786ddf',
 };
 
 let store;

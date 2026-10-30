@@ -13,6 +13,51 @@ class MemoryStore {
     this.scouting = new Map();
     this.goals = new Map();
     this.devices = new Map();
+    this.library = new Map();
+    this.reading = new Map();
+  }
+
+  async listLibrary() {
+    return [...this.library.values()].map((b) => ({ ...b }));
+  }
+
+  async getLibraryBook(id) {
+    const b = this.library.get(id);
+    return b ? { ...b } : null;
+  }
+
+  async createLibraryBook(b) {
+    const book = { id: crypto.randomUUID(), title: b.title, author: b.author, pages: b.pages ?? null, description: b.description ?? '', url: b.url, downloadUrl: b.downloadUrl ?? null, size: b.size ?? null, addedAt: new Date().toISOString().slice(0, 10) };
+    this.library.set(book.id, book);
+    return { ...book };
+  }
+
+  async deleteLibraryBook(id) {
+    this.library.delete(id);
+  }
+
+  async listReading({ userId }) {
+    return [...this.reading.values()].filter((r) => r.userId === userId).map((r) => ({ ...r }));
+  }
+
+  async getReading(id) {
+    const r = this.reading.get(id);
+    return r ? { ...r } : null;
+  }
+
+  async createReading(r) {
+    const row = { id: crypto.randomUUID(), userId: r.userId, title: r.title, author: r.author, pages: r.pages, finished: r.finished, createdAt: new Date().toISOString() };
+    this.reading.set(row.id, row);
+    return { ...row };
+  }
+
+  async updateReading(id, r) {
+    const row = this.reading.get(id);
+    if (row) Object.assign(row, { title: r.title, author: r.author, pages: r.pages, finished: r.finished });
+  }
+
+  async deleteReading(id) {
+    this.reading.delete(id);
   }
 
   async listDevices({ userId } = {}) {

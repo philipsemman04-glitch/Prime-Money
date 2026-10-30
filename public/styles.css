@@ -667,3 +667,51 @@ textarea { resize: vertical; min-height: 80px; }
 .inc-auto summary { cursor: pointer; font-size: 14px; font-weight: 700; color: var(--navy); }
 .menu-btn { position: relative; }
 .menu-dot { position: absolute; top: 7px; right: 7px; width: 9px; height: 9px; border-radius: 50%; background: var(--expense); box-shadow: 0 0 0 2px var(--surface); }
+
+/* ---------- library ---------- */
+.lib-tabs { display: inline-flex; padding: 4px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); justify-self: start; }
+.lib-tabs a { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 10px; font-weight: 700; font-size: 14px; color: var(--muted); }
+.lib-tabs a.on { background: var(--navy); color: #fff; }
+.lib-tabs a svg { width: 16px; height: 16px; }
+.lib-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.lib-stats > div { display: grid; justify-items: center; padding: 18px 10px; border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+.lib-stats b { font-size: 28px; font-weight: 800; color: var(--navy); }
+.lib-stats small { color: var(--muted); font-weight: 600; font-size: 12px; }
+.lock-note { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.book-cover { position: relative; flex: none; display: grid; place-items: center; width: 64px; height: 88px; border-radius: 8px 12px 12px 8px; color: #fff; box-shadow: inset 4px 0 0 rgba(255, 255, 255, 0.18), 0 6px 14px rgba(11, 31, 77, 0.2); }
+.book-cover span { font-weight: 800; font-size: 20px; letter-spacing: 0.04em; }
+.book-cover svg { position: absolute; bottom: 7px; right: 7px; width: 13px; height: 13px; opacity: 0.6; }
+.book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.book { display: grid; grid-template-columns: auto 1fr; gap: 14px; padding: 14px; border-radius: 18px; background: var(--surface-2); }
+.book-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.book-info b { font-size: 15px; color: var(--navy); overflow-wrap: anywhere; }
+.book-info span { font-size: 13px; color: var(--text); }
+.book-info small { font-size: 12px; color: var(--muted); font-weight: 600; }
+.book-info p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.book-actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.book-actions .del { margin-left: auto; }
+.count-pill { display: inline-grid; place-items: center; min-width: 26px; height: 22px; padding: 0 7px; margin-left: 6px; border-radius: 99px; background: var(--gold-soft); color: #8a6212; font-size: 12px; vertical-align: middle; }
+.lib-search { max-width: 260px; }
+.file-drop { position: relative; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 22px; border: 2px dashed var(--border); border-radius: 16px; background: var(--surface-2); color: var(--muted); font-size: 14px; cursor: pointer; text-align: center; }
+.file-drop:hover { border-color: var(--blue); }
+.file-drop b { color: var(--navy); }
+.file-drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.lib-link { margin: 10px 0 14px; font-size: 14px; }
+.lib-link summary { cursor: pointer; font-weight: 700; color: var(--navy); }
+.upload-progress { margin: 4px 0 12px; }
+.upload-progress small { display: block; margin-top: 6px; color: var(--muted); font-weight: 600; }
+.read-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.read-list li { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; padding: 12px; border-radius: 16px; background: var(--surface-2); }
+.read-list .book-cover { width: 46px; height: 62px; }
+.read-list .book-cover span { font-size: 15px; }
+.read-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.read-main b { color: var(--navy); overflow-wrap: anywhere; }
+.read-main span { font-size: 13px; }
+.read-main small { font-size: 12px; color: var(--muted); }
+.read-act { display: flex; gap: 2px; }
+@media (max-width: 640px) {
+  .book-grid { grid-template-columns: 1fr; }
+  .lib-tabs { width: 100%; }
+  .lib-tabs a { flex: 1; justify-content: center; padding: 10px 8px; }
+  .lib-search { max-width: none; width: 100%; }
+}
