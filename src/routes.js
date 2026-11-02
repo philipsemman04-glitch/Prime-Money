@@ -13,7 +13,7 @@ const {
   POT_LABELS,
 } = require('./notify');
 const { createPusher } = require('./push');
-const { METRICS, progressOf, statusOf, cleanIncentive } = require('./incentives');
+const { METRICS, progressOf, statusOf, cleanIncentive, weekStart } = require('./incentives');
 
 // File storage for the library's PDFs (Vercel Blob). Uploads go from the
 // browser straight to storage, so big books aren't limited by Vercel's
@@ -918,7 +918,8 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
   app.get('/api/admin/overview', requireUser, requireAdmin, async (req, res) => {
     const month = monthParam(req, res);
     if (!month) return;
-    const [users, txs] = await Promise.all([store.listUsers(), store.listTransactions()]);
+    const [users, txs, devices] = await Promise.all([store.listUsers(), store.listTransactions(), store.listDevices().catch(() => [])]);
+    const withPhones = new Set(devices.map((d) => d.userId));
     const byUser = new Map(users.map((u) => [u.id, []]));
     for (const t of txs) byUser.get(t.userId)?.push(t);
 
@@ -944,6 +945,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
           balance: s.balance,
           lastLoginAt: u.lastLoginAt,
           lastActivityAt,
+          notifications: withPhones.has(u.id),
         };
       });
     res.json({ month, team: { ...team, net: team.income - team.expense }, members });
@@ -1095,8 +1097,27 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
   });
 
   // --- incentives ----------------------------------------------------------
-  // Definitions live in the "incentives" setting (a JSON list); each win is its
-  // own setting "incentive_win:<incentive id>:<member id>" = { at, paid }.
+  // Definitions live in the "incentives" setting (a JSON list); each member's
+  // wins are a setting "incentive_win:<incentive id>:<member id>": { at, paid }
+  // for one-off incentives, or { awards: [...], paidQty } for ones won again
+  // and again (every time / every week).
+
+  const isRepeat = (inc) => Boolean(inc.repeat) && inc.repeat !== 'once';
+  // Summary of a member's wins on a repeating incentive.
+  function repeatInfo(inc, w, today) {
+    const awards = w?.awards || [];
+    const count = awards.reduce((s, a) => s + (a.qty || 1), 0);
+    const paidQty = Math.min(w?.paidQty || 0, count);
+    return {
+      count,
+      paidQty,
+      unpaid: count - paidQty,
+      earned: inc.amount != null ? count * inc.amount : null,
+      thisWeek: inc.repeat === 'weekly' ? awards.some((a) => a.week === weekStart(today)) : undefined,
+      awards: awards.slice(-10).reverse(),
+      lastAt: awards.length ? awards[awards.length - 1].at : null,
+    };
+  }
 
   const winKey = (incId, userId) => `incentive_win:${incId}:${userId}`;
   async function loadIncentives() {
@@ -1133,10 +1154,12 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
       .filter((u) => u.role !== 'admin' && u.status === 'active' && (!onlyUserId || u.id === onlyUserId))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
     const progress = new Map(); // "<incId>:<userId>" -> number
-    if (incentives.length && members.length) {
-      const metrics = new Set(incentives.map((i) => i.metric));
-      const from = incentives.reduce((m, i) => (i.start < m ? i.start : m), incentives[0].start);
-      const to = incentives.reduce((m, i) => (i.end > m ? i.end : m), incentives[0].end);
+    // Only one-off incentives with a target are tracked automatically.
+    const tracked = incentives.filter((i) => !isRepeat(i) && i.metric !== 'manual' && i.end);
+    if (tracked.length && members.length) {
+      const metrics = new Set(tracked.map((i) => i.metric));
+      const from = tracked.reduce((m, i) => (i.start < m ? i.start : m), tracked[0].start);
+      const to = tracked.reduce((m, i) => (i.end > m ? i.end : m), tracked[0].end);
       const [scouting, goals, txs] = await Promise.all([
         [...metrics].some((m) => SCOUT_METRICS.has(m)) ? store.listScouting({ userId: onlyUserId, from, to }) : [],
         metrics.has('goals_done') ? store.listGoals({ userId: onlyUserId }) : [],
@@ -1149,7 +1172,7 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
           goals: goals.filter((g) => g.userId === m.id),
           transactions: txs.filter((t) => t.userId === m.id),
         };
-        for (const inc of incentives) {
+        for (const inc of tracked) {
           const value = progressOf(inc, data, met);
           progress.set(`${inc.id}:${m.id}`, value);
           const k = `${inc.id}:${m.id}`;
@@ -1167,13 +1190,26 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
   // Quietly check one member after they log something; never fails the caller.
   const checkIncentives = (userId) => evaluateIncentives({ onlyUserId: userId }).catch((err) => console.error('Incentive check failed:', err.message));
 
-  const daysLeft = (inc, today) => Math.round((Date.parse(inc.end) - Date.parse(today)) / 86400000);
+  const daysLeft = (inc, today) => (inc.end ? Math.round((Date.parse(inc.end) - Date.parse(today)) / 86400000) : null);
 
   app.get('/api/incentives', requireUser, async (req, res) => {
     const isAdmin = req.user.role === 'admin';
     const { today, incentives, members, users, wins, progress } = await evaluateIncentives({});
     const nameOf = (id) => users.find((u) => u.id === id)?.displayName || 'Someone';
     const list = incentives.map((inc) => {
+      if (isRepeat(inc)) {
+        const base = { ...inc, goal: inc.goal || inc.description || '', metricLabel: METRICS.manual.label, unit: '', money: false, daysLeft: daysLeft(inc, today), weekOf: weekStart(today) };
+        const info = (id) => repeatInfo(inc, wins.get(`${inc.id}:${id}`), today);
+        const leaders = users
+          .filter((u) => u.role !== 'admin')
+          .map((u) => ({ name: u.displayName, count: info(u.id).count }))
+          .filter((x) => x.count > 0)
+          .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+        if (isAdmin) {
+          return { ...base, winners: leaders, members: members.map((m) => ({ id: m.id, name: m.displayName, status: statusOf(inc, { today }), ...info(m.id) })) };
+        }
+        return { ...base, winners: leaders, status: statusOf(inc, { today }), ...info(req.user.id) };
+      }
       const winners = [...wins.entries()]
         .filter(([k]) => k.startsWith(`${inc.id}:`))
         .map(([k, w]) => ({ id: k.slice(inc.id.length + 1), name: nameOf(k.slice(inc.id.length + 1)), at: w.at, paid: Boolean(w.paid) }))
@@ -1234,6 +1270,47 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const member = await store.getUser(String(req.body?.userId ?? ''));
     if (!member || member.role === 'admin') return res.status(404).json({ error: 'Member not found.' });
     const key = winKey(inc.id, member.id);
+    if (isRepeat(inc)) {
+      let win = { awards: [], paidQty: 0 };
+      try {
+        win = { ...win, ...JSON.parse((await store.getSetting(key)) || '{}') };
+      } catch {}
+      if (req.body?.won === false) {
+        // Take back one award.
+        const before = win.awards.length;
+        win.awards = win.awards.filter((a) => a.id !== req.body?.awardId);
+        if (win.awards.length === before) return res.status(404).json({ error: 'Award not found.' });
+        const count = win.awards.reduce((s, a) => s + (a.qty || 1), 0);
+        win.paidQty = Math.min(win.paidQty || 0, count);
+        await store.setSetting(key, JSON.stringify(win));
+        return res.json({ ok: true });
+      }
+      const today = dayIn();
+      if (today < inc.start) return res.status(400).json({ error: 'This incentive has not started yet.' });
+      const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 120) : '';
+      const award = { id: auth.randomToken().slice(0, 10), at: new Date().toISOString(), qty: 1, note };
+      if (inc.repeat === 'weekly') {
+        const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.week || '')) ? req.body.week : today;
+        if (day > today) return res.status(400).json({ error: "You can't award a week that hasn't started." });
+        award.week = weekStart(day);
+        if (win.awards.some((a) => a.week === award.week)) return res.status(400).json({ error: 'They already won this week.' });
+      } else {
+        const qty = Number(req.body?.qty ?? 1);
+        if (!Number.isInteger(qty) || qty < 1 || qty > 100) return res.status(400).json({ error: 'Award between 1 and 100 at a time.' });
+        award.qty = qty;
+      }
+      win.awards.push(award);
+      await store.setSetting(key, JSON.stringify(win));
+      const naira = (n) => `₦${Math.round(n).toLocaleString('en-US')}`;
+      const worth = inc.amount != null ? naira(award.qty * inc.amount) : inc.reward;
+      await pushTo([member.id], {
+        title: `🏆 You earned: ${inc.title}${award.qty > 1 ? ` ×${award.qty}` : ''}`,
+        body: inc.repeat === 'weekly' ? `${worth} for the week of ${award.week}. Keep it up!` : `${worth}${note ? ` · ${note}` : ''}. Keep it up!`,
+        url: '/#/incentives',
+        tag: `incentive-${inc.id}-${award.id}`,
+      });
+      return res.json({ ok: true, award });
+    }
     if (req.body?.won === false) {
       await store.deleteSetting(key);
     } else if (!(await store.getSetting(key))) {
@@ -1251,6 +1328,19 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const key = winKey(inc.id, userId);
     const raw = await store.getSetting(key);
     if (!raw) return res.status(400).json({ error: 'They have not unlocked this incentive yet.' });
+    if (isRepeat(inc)) {
+      // Everything awarded so far counts as given (or nothing does).
+      const win = JSON.parse(raw);
+      const count = (win.awards || []).reduce((s, a) => s + (a.qty || 1), 0);
+      const newlyPaid = req.body?.paid === false ? 0 : count - Math.min(win.paidQty || 0, count);
+      win.paidQty = req.body?.paid === false ? 0 : count;
+      await store.setSetting(key, JSON.stringify(win));
+      if (newlyPaid > 0) {
+        const worth = inc.amount != null ? `₦${Math.round(newlyPaid * inc.amount).toLocaleString('en-US')}` : inc.reward;
+        await pushTo([userId], { title: `🎁 Reward on its way: ${worth}`, body: `For ${inc.title}${newlyPaid > 1 ? ` ×${newlyPaid}` : ''}. Well done!`, url: '/#/incentives', tag: `incentive-${inc.id}-paid` });
+      }
+      return res.json({ ok: true });
+    }
     const win = { ...JSON.parse(raw), paid: req.body?.paid !== false };
     await store.setSetting(key, JSON.stringify(win));
     if (win.paid) await pushTo([userId], { title: `🎁 Reward on its way: ${inc.reward}`, body: `For unlocking ${inc.title}. Well done!`, url: '/#/incentives', tag: `incentive-${inc.id}` });
@@ -1596,17 +1686,20 @@ function createApp(store, { sessionSecret, secureCookies = false, fetchLiveRate,
     const tx = await recordTransaction(req.member, req.body, res);
     if (!tx?.id) return;
     if (tx.type === 'income' && req.member.role !== 'admin') await checkIncentives(req.member.id);
+    // Tell the admin whether the member's phone got the notification.
+    let notified = null;
     if (req.member.id !== req.user.id) {
       const amount = formatMoney(tx.amountCents, 'USD');
-      await pushTo([req.member.id], {
+      const reached = await pushTo([req.member.id], {
         title: tx.type === 'income' ? 'Income recorded 💰' : 'Spending recorded',
         body: tx.type === 'income'
           ? `${amount} (${tx.category}) was added to your account and split into your pots.`
           : `${amount} (${tx.category}) was recorded from your ${POT_LABELS[tx.pot] ?? 'Personal'} pot.`,
         url: '/#/',
       });
+      notified = reached.has(req.member.id);
     }
-    res.status(201).json({ id: tx.id });
+    res.status(201).json({ id: tx.id, notified, pushEnabled: pusher.enabled });
   });
 
   app.delete('/api/admin/members/:id/transactions/:txId', requireUser, requireAdmin, loadMember, async (req, res) => {

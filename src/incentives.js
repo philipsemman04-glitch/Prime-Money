@@ -75,12 +75,24 @@ function progressOf(inc, { scouting = [], goals = [], transactions = [] }, met) 
   }
 }
 
+// How often an incentive can be won: once, every time it's achieved, or once a week (ongoing).
+const REPEATS = ['once', 'each', 'weekly'];
+
 // Where a member stands: won, upcoming, missed, in_progress or available.
+// Incentives that can be won again stay available (or upcoming/ended) - their wins are counted.
 function statusOf(inc, { won, progress, today }) {
-  if (won) return 'won';
+  const repeat = inc.repeat && inc.repeat !== 'once';
+  if (won && !repeat) return 'won';
   if (today < inc.start) return 'upcoming';
-  if (today > inc.end) return 'missed';
+  if (inc.end && today > inc.end) return 'missed';
+  if (repeat) return 'available';
   return progress > 0 ? 'in_progress' : 'available';
+}
+
+// Monday of the week a day falls in (weeks run Monday to Sunday).
+function weekStart(day) {
+  const d = new Date(`${day}T00:00:00Z`);
+  return addDays(day, -((d.getUTCDay() + 6) % 7));
 }
 
 // Clean up an incentive sent by the admin. Returns { incentive } or { error }.
@@ -90,7 +102,9 @@ function cleanIncentive(body, today) {
   const reward = str(body?.reward);
   // What has to be achieved, in the admin's own words.
   const goal = str(body?.goal) || str(body?.description);
-  const metric = body?.metric || 'manual';
+  const repeat = REPEATS.includes(body?.repeat) ? body.repeat : 'once';
+  // Incentives won again and again are awarded by hand.
+  const metric = repeat === 'once' ? body?.metric || 'manual' : 'manual';
   if (!title || title.length > 80) return { error: 'Give the incentive a name (up to 80 characters).' };
   if (!reward || reward.length > 80) return { error: 'Say what the reward is (up to 80 characters).' };
   if (!goal) return { error: 'Write what has to be achieved.' };
@@ -105,11 +119,21 @@ function cleanIncentive(body, today) {
   }
   const isDay = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d));
   const start = body?.start || today;
-  const end = body?.end;
-  if (!isDay(start) || !isDay(end)) return { error: 'Pick the start and end dates.' };
-  if (end < start) return { error: 'The end date must be after the start date.' };
-  if (Date.parse(end) - Date.parse(start) > 400 * 86400000) return { error: 'An incentive can run for up to about a year.' };
-  return { incentive: { title, reward, goal, metric, target, start, end } };
+  // Repeating incentives can keep going with no end date.
+  const end = repeat !== 'once' && (body?.noEnd === true || body?.noEnd === 'on' || !body?.end) ? null : body?.end;
+  if (!isDay(start)) return { error: 'Pick the start date.' };
+  if (end !== null) {
+    if (!isDay(end)) return { error: 'Pick the end date.' };
+    if (end < start) return { error: 'The end date must be after the start date.' };
+    if (repeat === 'once' && Date.parse(end) - Date.parse(start) > 400 * 86400000) return { error: 'An incentive can run for up to about a year.' };
+  }
+  // Optional cash value of one award, in naira, so totals can be shown.
+  let amount = null;
+  if (body?.amount !== undefined && body?.amount !== null && body?.amount !== '') {
+    amount = Number(body.amount);
+    if (!Number.isFinite(amount) || amount < 0 || amount > 1e10) return { error: 'The cash value must be a number.' };
+  }
+  return { incentive: { title, reward, goal, metric, target, start, end, repeat, amount } };
 }
 
-module.exports = { METRICS, progressOf, statusOf, cleanIncentive, longestRun, monthsBetween };
+module.exports = { METRICS, REPEATS, progressOf, statusOf, cleanIncentive, longestRun, monthsBetween, weekStart };

@@ -863,6 +863,83 @@ scenario('incentives: progress is tracked automatically, wins are recorded and a
   assert.equal(mine.some((i) => i.id === cash.id), false);
 });
 
+scenario('incentives that repeat: awarded every time or every week, with cash totals; income tells the admin if the phone was notified', async (t, makeStore) => {
+  const pushes = [];
+  const pusher = { enabled: true, publicKey: 'k', async send(sub, payload) { pushes.push({ endpoint: sub.endpoint, ...payload }); return { sent: true }; } };
+  const { base, close } = await startServer(makeStore, { pusher });
+  t.after(close);
+  const { admin, ada } = await teamWithMember(base);
+  const adaId = await memberId(admin, 'ada');
+  const today = teamDay();
+
+  // Income: no phone yet, then a phone.
+  let r = await admin(`/api/admin/members/${adaId}/transactions`, { method: 'POST', body: { type: 'income', amount: 10, category: 'Salary', date: today } });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.notified, false);
+  let team = (await admin(`/api/admin/overview?month=${today.slice(0, 7)}`)).body.members;
+  assert.equal(team.find((m) => m.id === adaId).notifications, false);
+  const keys = { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' };
+  await ada('/api/me/devices', { method: 'POST', body: { subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/ada', keys } } });
+  r = await admin(`/api/admin/members/${adaId}/transactions`, { method: 'POST', body: { type: 'income', amount: 10, category: 'Salary', date: today } });
+  assert.equal(r.body.notified, true);
+  assert.ok(pushes.some((p) => p.title === 'Income recorded 💰'));
+  team = (await admin(`/api/admin/overview?month=${today.slice(0, 7)}`)).body.members;
+  assert.equal(team.find((m) => m.id === adaId).notifications, true);
+
+  // Prospecting: ₦2,000 every time, no end date.
+  r = await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Prospecting', reward: '₦2,000 cash', goal: 'Bring in a prospect', repeat: 'each', amount: 2000, noEnd: true, start: teamDay(-1), metric: 'messages', target: 5 } });
+  assert.equal(r.status, 201);
+  const prospect = r.body;
+  assert.equal(prospect.end, null);
+  assert.equal(prospect.metric, 'manual'); // repeating ones are awarded by hand
+  // Punctuality: every week.
+  const { body: punctual } = await admin('/api/admin/incentives', { method: 'POST', body: { title: 'Punctuality', reward: '₦5,000', goal: 'On time all week', repeat: 'weekly', amount: 5000, noEnd: 'on', start: teamDay(-30) } });
+
+  assert.equal((await admin(`/api/admin/incentives/${prospect.id}/award`, { method: 'POST', body: { userId: adaId, qty: 0 } })).status, 400);
+  assert.equal((await admin(`/api/admin/incentives/${prospect.id}/award`, { method: 'POST', body: { userId: adaId, qty: 101 } })).status, 400);
+  r = await admin(`/api/admin/incentives/${prospect.id}/award`, { method: 'POST', body: { userId: adaId, qty: 1 } });
+  assert.equal(r.status, 200);
+  const firstAward = r.body.award.id;
+  await admin(`/api/admin/incentives/${prospect.id}/award`, { method: 'POST', body: { userId: adaId, qty: 5, note: 'Five from IG' } });
+  assert.ok(pushes.some((p) => p.title === '🏆 You earned: Prospecting ×5' && p.body.includes('₦10,000')));
+
+  let mine = (await ada('/api/incentives')).body.incentives.find((i) => i.id === prospect.id);
+  assert.equal(mine.status, 'available'); // still up for grabs
+  assert.equal(mine.count, 6);
+  assert.equal(mine.earned, 12000);
+  assert.equal(mine.unpaid, 6);
+  assert.equal(mine.daysLeft, null);
+  assert.equal(mine.awards[0].note, 'Five from IG');
+
+  // Mark given, then more prospects come in.
+  await admin(`/api/admin/incentives/${prospect.id}/paid`, { method: 'POST', body: { userId: adaId } });
+  assert.ok(pushes.some((p) => p.title === '🎁 Reward on its way: ₦12,000'));
+  await admin(`/api/admin/incentives/${prospect.id}/award`, { method: 'POST', body: { userId: adaId, qty: 2 } });
+  mine = (await ada('/api/incentives')).body.incentives.find((i) => i.id === prospect.id);
+  assert.equal(mine.count, 8);
+  assert.equal(mine.unpaid, 2);
+  // Taking back an award.
+  assert.equal((await admin(`/api/admin/incentives/${prospect.id}/award`, { method: 'POST', body: { userId: adaId, won: false, awardId: 'nope' } })).status, 404);
+  await admin(`/api/admin/incentives/${prospect.id}/award`, { method: 'POST', body: { userId: adaId, won: false, awardId: firstAward } });
+  mine = (await ada('/api/incentives')).body.incentives.find((i) => i.id === prospect.id);
+  assert.equal(mine.count, 7);
+
+  // Weekly: once per week.
+  r = await admin(`/api/admin/incentives/${punctual.id}/award`, { method: 'POST', body: { userId: adaId } });
+  assert.equal(r.status, 200);
+  assert.equal((await admin(`/api/admin/incentives/${punctual.id}/award`, { method: 'POST', body: { userId: adaId, week: today } })).status, 400); // same week
+  assert.equal((await admin(`/api/admin/incentives/${punctual.id}/award`, { method: 'POST', body: { userId: adaId, week: teamDay(7) } })).status, 400); // future
+  assert.equal((await admin(`/api/admin/incentives/${punctual.id}/award`, { method: 'POST', body: { userId: adaId, week: teamDay(-7) } })).status, 200);
+  mine = (await ada('/api/incentives')).body.incentives.find((i) => i.id === punctual.id);
+  assert.equal(mine.count, 2);
+  assert.equal(mine.thisWeek, true);
+  assert.equal(mine.earned, 10000);
+
+  const adminView = (await admin('/api/incentives')).body.incentives.find((i) => i.id === prospect.id);
+  assert.equal(adminView.members.find((m) => m.id === adaId).count, 7);
+  assert.deepEqual(adminView.winners, [{ name: 'Ada', count: 7 }].map((w) => ({ ...w, name: adminView.winners[0].name })));
+});
+
 scenario('library: the admin shares PDFs everyone can download; each member keeps a private reading list', async (t, makeStore) => {
   const deleted = [];
   const blob = {

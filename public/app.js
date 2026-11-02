@@ -144,7 +144,7 @@ function toast(message) {
   el.textContent = message;
   el.hidden = false;
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => (el.hidden = true), 2800);
+  toast.timer = setTimeout(() => (el.hidden = true), Math.max(2800, message.length * 60));
 }
 
 // Announcements a member has closed are remembered on their device.
@@ -872,10 +872,13 @@ function openAddTransaction(rerender, { endpoint = '/api/me/transactions', type:
   form.querySelectorAll('.toggle2 button').forEach((b) => b.addEventListener('click', () => setType(b.dataset.type)));
   setType(startType);
   onSubmit(form, async (d) => {
-    await api(endpoint, { method: 'POST', body: d });
+    const r = await api(endpoint, { method: 'POST', body: d });
     state.month = d.date.slice(0, 7);
     close();
-    toast(forName ? `Saved to ${forName}'s account${d.type === 'income' ? ' — split into their pots' : ''}` : 'Transaction saved');
+    let phone = '';
+    if (forName && r && r.notified === true) phone = ` · 🔔 ${forName.split(' ')[0]}'s phone was notified`;
+    else if (forName && r && r.notified === false) phone = ` · ${forName.split(' ')[0]} hasn't turned on phone notifications, so no alert was sent`;
+    toast(forName ? `Saved to ${forName}'s account${d.type === 'income' ? ' — split into their pots' : ''}${phone}` : 'Transaction saved');
     rerender();
   });
 }
@@ -982,7 +985,7 @@ async function renderTeam() {
       return `
       <tr class="clickable" data-open="${esc(m.id)}">
         <td><div class="person"><span class="avatar sm ${m.role === 'admin' ? '' : 'blue'}">${esc(initials(m.displayName))}</span>
-          <div><strong>${esc(m.displayName)}</strong> ${m.role === 'admin' ? '<span class="tag blue">Admin</span>' : ''}
+          <div><strong>${esc(m.displayName)}</strong> ${m.role === 'admin' ? '<span class="tag blue">Admin</span>' : ''} ${m.notifications ? '<span title="Phone notifications on" aria-label="Phone notifications on">🔔</span>' : ''}
           <div class="sub">${m.username ? '@' + esc(m.username) : 'Not signed up yet'}</div>
           ${link ? `<div class="invite-box"><input readonly value="${esc(link)}"><button class="btn soft small" data-copy="${esc(link)}">Copy link</button></div>` : ''}</div></div></td>
         <td>${statusPill(m.status)}</td>
@@ -2277,7 +2280,14 @@ function incTarget(inc) {
   if (inc.metric === 'manual') return goal;
   return `${goal}<div class="inc-tracked">Tracked by the app · ${esc(inc.metricLabel)}: <b>${inc.money ? money(inc.target) : `${inc.target.toLocaleString()} ${esc(inc.unit)}`}</b></div>`;
 }
+const naira = (n) => `₦${Math.round(n).toLocaleString('en-US')}`;
+const isRepeatInc = (inc) => inc.repeat === 'each' || inc.repeat === 'weekly';
+const REPEAT_LABEL = { each: '🔁 Every time', weekly: '📅 Every week' };
 function incWhen(inc) {
+  if (!inc.end) {
+    if (inc.start > state.incToday) return `Starts ${prettyDay(inc.start, { day: 'numeric', month: 'short' })} · no end date`;
+    return inc.repeat === 'weekly' ? 'Every week · no end date' : 'Ongoing · no end date';
+  }
   const range = `${prettyDay(inc.start, { day: 'numeric', month: 'short' })} – ${prettyDay(inc.end, { day: 'numeric', month: 'short' })}`;
   if (inc.daysLeft < 0) return `Ended · ${range}`;
   if (inc.start > state.incToday) return `Starts ${prettyDay(inc.start, { day: 'numeric', month: 'short' })} · ${range}`;
@@ -2308,11 +2318,41 @@ function incentiveCard(inc) {
     </section>`;
 }
 
+// An incentive that can be won again and again (every time / every week).
+function repeatCard(inc) {
+  const ended = inc.status === 'missed';
+  const weekly = inc.repeat === 'weekly';
+  const unit = weekly ? (inc.count === 1 ? 'week won' : 'weeks won') : inc.count === 1 ? 'time earned' : 'times earned';
+  const leaders = inc.winners.filter((w) => w.name !== state.info.user.displayName);
+  const history = inc.awards.length
+    ? `<ul class="inc-history">${inc.awards
+        .slice(0, 4)
+        .map((a) => `<li><span>${weekly ? `Week of ${esc(prettyDay(a.week, { day: 'numeric', month: 'short' }))}` : `×${a.qty}${a.note ? ` · ${esc(a.note)}` : ''}`}</span><span class="muted">${esc(formatDateTime(a.at))}</span></li>`)
+        .join('')}</ul>`
+    : '';
+  return `
+    <section class="card inc-card inc-repeat ${inc.count ? 'is-won' : ''} ${ended ? 'is-missed' : ''}">
+      <div class="inc-top"><span class="inc-ico">${weekly ? '📅' : '🔁'}</span><span class="pill ${ended ? 'declined' : inc.status === 'upcoming' ? 'muted-pill' : 'info-pill'}">${ended ? 'Ended' : inc.status === 'upcoming' ? 'Coming soon' : REPEAT_LABEL[inc.repeat]}</span></div>
+      <div class="inc-reward">${esc(inc.reward)}${inc.amount != null ? `<small> ${weekly ? 'per week' : 'each time'}</small>` : ''}</div>
+      <h3>${esc(inc.title)}</h3>
+      <div class="inc-target">${incTarget(inc)}</div>
+      <div class="inc-count"><div><b>${inc.count}</b><small>${unit}</small></div>${inc.earned != null ? `<div><b>${naira(inc.earned)}</b><small>earned${inc.unpaid && inc.amount != null ? ` · ${naira(inc.unpaid * inc.amount)} on its way` : inc.count ? ' · all received ✓' : ''}</small></div>` : inc.unpaid ? `<div><b>${inc.unpaid}</b><small>on its way</small></div>` : ''}</div>
+      ${weekly && !ended && inc.status !== 'upcoming' ? `<div class="inc-week ${inc.thisWeek ? 'on' : ''}">${inc.thisWeek ? '✅ You won this week' : '⏳ This week is still open — go win it'}</div>` : ''}
+      ${history}
+      <div class="inc-foot"><span>${esc(incWhen(inc))}</span>
+        <span>${leaders.length ? `Also earning: ${esc(leaders.slice(0, 3).map((w) => `${w.name.split(' ')[0]} ×${w.count}`).join(', '))}` : ''}</span></div>
+    </section>`;
+}
+
 async function renderMyIncentives() {
   setTitle('Incentives', 'Rewards you can unlock');
   const { incentives, today } = await api('/api/incentives');
   state.incToday = today;
-  const by = (st) => incentives.filter((i) => i.status === st);
+  const repeats = incentives.filter(isRepeatInc);
+  const once = incentives.filter((i) => !isRepeatInc(i));
+  const by = (st) => once.filter((i) => i.status === st);
+  const ongoing = repeats.filter((i) => i.status !== 'missed');
+  const earned = repeats.reduce((s, i) => s + (i.earned || 0), 0);
   const going = [...by('in_progress'), ...by('available')].sort((a, b) => (b.target ? b.progress / b.target : 0) - (a.target ? a.progress / a.target : 0));
   const section = (title, list, empty) =>
     list.length ? `<div class="s12"><h2 class="inc-h">${title}</h2><div class="inc-grid">${list.map(incentiveCard).join('')}</div></div>` : empty ? `<div class="s12"><h2 class="inc-h">${title}</h2><section class="card"><div class="empty">${empty}</div></section></div>` : '';
@@ -2321,12 +2361,15 @@ async function renderMyIncentives() {
       <div class="s12"><div class="inc-summary">
         <div><span>🏆</span><b>${by('won').length}</b><small>Won</small></div>
         <div><span>🔥</span><b>${by('in_progress').length}</b><small>On the way</small></div>
-        <div><span>🎁</span><b>${by('available').length}</b><small>Up for grabs</small></div>
+        <div><span>🎁</span><b>${by('available').length + ongoing.length}</b><small>Up for grabs</small></div>
+        ${earned ? `<div><span>💰</span><b>${naira(earned)}</b><small>Earned</small></div>` : ''}
       </div></div>
-      ${section('Up for grabs', going, incentives.length ? 'Nothing open right now — check back soon.' : 'No incentives yet. Your team lead will add rewards here.')}
+      ${ongoing.length ? `<div class="s12"><h2 class="inc-h">Earn again and again</h2><div class="inc-grid">${ongoing.map(repeatCard).join('')}</div></div>` : ''}
+      ${section('Up for grabs', going, incentives.length ? (ongoing.length ? '' : 'Nothing open right now — check back soon.') : 'No incentives yet. Your team lead will add rewards here.')}
       ${section('Coming soon', by('upcoming'))}
       ${section('Won 🏆', by('won'))}
       ${section('Ended', by('missed'))}
+      ${repeats.some((i) => i.status === 'missed') ? `<div class="s12"><h2 class="inc-h">Ended</h2><div class="inc-grid">${repeats.filter((i) => i.status === 'missed').map(repeatCard).join('')}</div></div>` : ''}
     </div>`;
 }
 
@@ -2339,7 +2382,33 @@ async function renderIncentivesAdmin() {
     return `${today.slice(0, 7)}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
   })();
   const order = (i) => (i.daysLeft < 0 ? 2 : i.start > today ? 1 : 0);
-  const sorted = [...incentives].sort((a, b) => order(a) - order(b) || a.end.localeCompare(b.end));
+  const sorted = [...incentives].sort((a, b) => order(a) - order(b) || (a.end || '9999').localeCompare(b.end || '9999'));
+  const repeatRows = (inc) =>
+    inc.members.length
+      ? `<div class="inc-members">${inc.members
+          .map((m) => {
+            const weekly = inc.repeat === 'weekly';
+            const owed = m.unpaid ? (inc.amount != null ? naira(m.unpaid * inc.amount) : `${m.unpaid} reward${m.unpaid > 1 ? 's' : ''}`) : '';
+            const hist = m.awards.length
+              ? `<details class="inc-hist"><summary>History</summary><ul class="inc-history">${m.awards
+                  .map((a) => `<li><span>${weekly ? `Week of ${esc(prettyDay(a.week, { day: 'numeric', month: 'short' }))}` : `×${a.qty}`}${a.note ? ` · ${esc(a.note)}` : ''}</span><span class="muted">${esc(formatDateTime(a.at))} <button type="button" class="link-btn" data-unaward="${esc(inc.id)}" data-user="${esc(m.id)}" data-award-id="${esc(a.id)}" title="Take back this award">✕</button></span></li>`)
+                  .join('')}</ul></details>`
+              : '';
+            return `<div class="inc-mrow">
+              <span class="avatar sm blue">${esc(initials(m.name))}</span>
+              <div class="inc-mmain"><div class="inc-mname"><b>${esc(m.name)}</b>
+                <span class="pill ${m.count ? 'active' : 'muted-pill'}">${weekly ? `${m.count} week${m.count === 1 ? '' : 's'}` : `×${m.count}`}</span>
+                ${weekly && m.thisWeek ? '<span class="pill active">This week ✓</span>' : ''}</div>
+                <div class="inc-msub">${m.count ? `${inc.amount != null ? `${naira(m.earned)} earned` : `${m.count} earned`}${owed ? ` · <b>${owed} to give</b>` : ' · all given ✓'}` : 'Nothing yet'}</div>
+                ${hist}</div>
+              <div class="inc-mact">
+                ${m.status === 'missed' ? '' : `<button type="button" class="btn navy small" data-award-repeat="${esc(inc.id)}" data-user="${esc(m.id)}" data-name="${esc(m.name)}">${weekly ? 'Award week' : 'Award'}</button>`}
+                ${m.unpaid ? `<button type="button" class="btn small" data-give="${esc(inc.id)}" data-user="${esc(m.id)}">Mark given</button>` : ''}
+              </div>
+            </div>`;
+          })
+          .join('')}</div>`
+      : '<p class="muted" style="margin:0">No active members yet.</p>';
   const memberRows = (inc) =>
     inc.members.length
       ? `<div class="inc-members">${inc.members
@@ -2368,6 +2437,14 @@ async function renderIncentivesAdmin() {
             <label>Reward <input name="reward" maxlength="80" required placeholder="e.g. ₦20,000 bonus"></label>
           </div>
           <label>What has to be achieved <textarea name="goal" rows="2" maxlength="300" required placeholder="e.g. Close 3 new clients and post every day this month"></textarea></label>
+          <div class="row2">
+            <label>How often can it be won? <select name="repeat">
+              <option value="once">Once — first to achieve it unlocks it</option>
+              <option value="each">Every time they achieve it (e.g. per prospect)</option>
+              <option value="weekly">Every week (e.g. punctuality)</option>
+            </select></label>
+            <label class="inc-amount-field">Cash value per award (₦, optional) <input name="amount" type="number" min="0" step="1" inputmode="numeric" placeholder="e.g. 2000"></label>
+          </div>
           <details class="inc-auto">
             <summary>Let the app track it automatically (optional)</summary>
             <p class="muted" style="font-size:13px;margin:8px 0 12px">Only for things the app already counts. Leave it on "No" and award it yourself with the Award button.</p>
@@ -2378,8 +2455,9 @@ async function renderIncentivesAdmin() {
           </details>
           <div class="row2">
             <label>Starts <input name="start" type="date" value="${today.slice(0, 8)}01" required></label>
-            <label>Ends <input name="end" type="date" value="${monthEnd}" required></label>
+            <label class="inc-end-field">Ends <input name="end" type="date" value="${monthEnd}" required></label>
           </div>
+          <label class="check inc-noend-field" hidden><input type="checkbox" name="noEnd" checked> No end date — keeps going until I remove it</label>
           <div class="error"></div>
           <button class="btn navy" type="submit">${ICONS.trophy} Create incentive</button>
         </form>
@@ -2392,8 +2470,10 @@ async function renderIncentivesAdmin() {
           <div class="card-head"><div><div class="inc-reward" style="font-size:20px">${esc(inc.reward)}</div><h2 style="margin-top:2px">${esc(inc.title)}</h2></div>
             <button type="button" class="btn soft small" data-del-inc="${esc(inc.id)}">${ICONS.trash} Remove</button></div>
           <div class="inc-target" style="margin-top:-2px">${incTarget(inc)}</div>
-          <div class="inc-foot" style="margin:8px 0 14px"><span>${esc(incWhen(inc))}</span><span>${inc.winners.length} of ${inc.members.length} unlocked</span></div>
-          ${memberRows(inc)}
+          <div class="inc-foot" style="margin:8px 0 14px"><span>${isRepeatInc(inc) ? `${REPEAT_LABEL[inc.repeat]}${inc.amount != null ? ` · ${naira(inc.amount)} each` : ''} · ${inc.end ? esc(incWhen(inc)) : 'no end date'}` : esc(incWhen(inc))}</span><span>${
+            isRepeatInc(inc) ? `${inc.members.reduce((s, m) => s + m.count, 0)} awarded in total` : `${inc.winners.length} of ${inc.members.length} unlocked`
+          }</span></div>
+          ${isRepeatInc(inc) ? repeatRows(inc) : memberRows(inc)}
         </section></div>`,
               )
               .join('')
@@ -2410,11 +2490,26 @@ async function renderIncentivesAdmin() {
   };
   form.elements.metric.addEventListener('change', syncTarget);
   syncTarget();
+  const syncRepeat = () => {
+    const repeat = form.elements.repeat.value !== 'once';
+    form.querySelector('.inc-auto').hidden = repeat;
+    if (repeat) form.elements.metric.value = 'manual';
+    syncTarget();
+    form.querySelector('.inc-noend-field').hidden = !repeat;
+    const noEnd = repeat && form.elements.noEnd.checked;
+    form.querySelector('.inc-end-field').hidden = noEnd;
+    form.elements.end.required = !noEnd;
+  };
+  form.elements.repeat.addEventListener('change', syncRepeat);
+  form.elements.noEnd.addEventListener('change', syncRepeat);
+  syncRepeat();
   onSubmit(form, async (d) => {
     let target = d.target;
     // Money targets are entered in the currency on screen and stored in dollars.
     if (d.metric === 'income' && displayCurrency() === 'NGN') target = Number(d.target) / (state.info.rates.NGN?.rate || 1);
-    await api('/api/admin/incentives', { method: 'POST', body: { ...d, target } });
+    const body = { ...d, target, noEnd: d.repeat !== 'once' && form.elements.noEnd.checked };
+    if (body.noEnd) delete body.end;
+    await api('/api/admin/incentives', { method: 'POST', body });
     toast('Incentive created — the team has been notified');
     renderIncentivesAdmin();
   });
@@ -2433,12 +2528,70 @@ async function renderIncentivesAdmin() {
       renderIncentivesAdmin();
     }),
   );
+  const byId = new Map(incentives.map((i) => [i.id, i]));
+  app.querySelectorAll('[data-award-repeat]').forEach((b) =>
+    b.addEventListener('click', () => openAwardForm(byId.get(b.dataset.awardRepeat), b.dataset.user, b.dataset.name)),
+  );
+  app.querySelectorAll('[data-give]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      await api(`/api/admin/incentives/${b.dataset.give}/paid`, { method: 'POST', body: { userId: b.dataset.user, paid: true } });
+      toast('Marked as given — they have been notified');
+      renderIncentivesAdmin();
+    }),
+  );
+  app.querySelectorAll('[data-unaward]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      if (!confirm('Take back this award?')) return;
+      await api(`/api/admin/incentives/${b.dataset.unaward}/award`, { method: 'POST', body: { userId: b.dataset.user, won: false, awardId: b.dataset.awardId } });
+      toast('Award taken back');
+      renderIncentivesAdmin();
+    }),
+  );
   app.querySelectorAll('[data-paid]').forEach((c) =>
     c.addEventListener('change', async () => {
       await api(`/api/admin/incentives/${c.dataset.paid}/paid`, { method: 'POST', body: { userId: c.dataset.user, paid: c.checked } });
       toast(c.checked ? 'Marked as given — they have been notified' : 'Marked as not given yet');
     }),
   );
+}
+
+// Award a repeating incentive: how many times (every time) or which week (weekly).
+function openAwardForm(inc, userId, name) {
+  const weekly = inc.repeat === 'weekly';
+  const first = name.split(' ')[0];
+  const fmt = (d) => prettyDay(d, { day: 'numeric', month: 'short' });
+  const thisWeek = inc.weekOf;
+  const lastWeek = shiftDay(thisWeek, -7);
+  const { el, close } = openModal(
+    `Award ${first}: ${inc.title}`,
+    `<form id="award">
+      ${
+        weekly
+          ? `<label>Which week? <select name="week">
+              <option value="${thisWeek}">This week (from ${esc(fmt(thisWeek))})</option>
+              <option value="${lastWeek}">Last week (from ${esc(fmt(lastWeek))})</option>
+            </select></label>`
+          : `<label>How many times? <input name="qty" type="number" min="1" max="100" step="1" value="1" required inputmode="numeric"></label>`
+      }
+      ${inc.amount != null ? `<p class="muted award-total" style="margin:0 0 12px"></p>` : ''}
+      <label>Note (optional) <input name="note" maxlength="120" placeholder="${weekly ? 'e.g. On time every day' : 'e.g. 5 prospects from Instagram'}"></label>
+      <div class="error"></div>
+      <button class="btn block" type="submit">${ICONS.trophy} Award</button>
+    </form>`,
+  );
+  const form = el.querySelector('#award');
+  const total = el.querySelector('.award-total');
+  const sync = () => {
+    if (total) total.textContent = `${first} gets ${naira((weekly ? 1 : Number(form.elements.qty.value) || 0) * inc.amount)}.`;
+  };
+  form.elements.qty?.addEventListener('input', sync);
+  sync();
+  onSubmit(form, async (d) => {
+    await api(`/api/admin/incentives/${inc.id}/award`, { method: 'POST', body: { userId, ...d, qty: d.qty ? Number(d.qty) : undefined } });
+    close();
+    toast(`Awarded — ${first} has been notified`);
+    renderIncentivesAdmin();
+  });
 }
 
 // --- library ----------------------------------------------------------------
